@@ -1,2 +1,7 @@
+<<<<<<< HEAD
 email,password,role,used_today,last_used_date
 shatakshidudala@gmail.com,dudala@123,user,2,2025-07-22
+=======
+email,password,role,used_today,last_used_date
+shatakshidudala@gmail.com,dudala@123,user,2,2025-07-22
+>>>>>>> d94007f (Initial commit)
