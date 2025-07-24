@@ -11,4 +11,5 @@ matplotlib
 fpdf==1.7.2
 PyPDF2
 groq
-
+yagmail
+uuid

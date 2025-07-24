@@ -1,243 +1,361 @@
+# app.py (Part 1)
+
 import streamlit as st
 import pandas as pd
 import os
-import re
-import requests
-from datetime import datetime, date
-from fpdf import FPDF
-from gtts import gTTS
+import random
+import string
+from datetime import datetime
+from dotenv import load_dotenv
 from groq import Groq
+import smtplib
+from email.message import EmailMessage
 
+load_dotenv()
 
-# ====== CONFIG ======
+# File paths
 USERS_CSV = "users.csv"
 HISTORY_CSV = "history.csv"
-FREE_LIMIT = 3
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]  # Replace with your actual Groq API key
+
+# Initialize Groq client
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY)
-GROQ_MODEL = "llama3-8b-8192"
 
-# ====== INITIAL SETUP ======
-if not os.path.exists(USERS_CSV):
-    pd.DataFrame(columns=["email", "password", "role", "used_today", "last_used_date"]).to_csv(USERS_CSV, index=False)
-else:
-    df = pd.read_csv(USERS_CSV)
-    if "last_used_date" not in df.columns:
-        df["last_used_date"] = str(date.today())
-        df.to_csv(USERS_CSV, index=False)
+# Utility: Send OTP email
+def send_email_otp(to_email, otp):
+    msg = EmailMessage()
+    msg.set_content(f"Your OTP to reset your password is: {otp}")
+    msg["Subject"] = "Password Reset OTP"
+    msg["From"] = os.getenv("EMAIL_ADDRESS")
+    msg["To"] = to_email
 
-if not os.path.exists(HISTORY_CSV):
-    pd.DataFrame(columns=["email", "timestamp", "role_target", "score", "feedback", "rewritten"]).to_csv(HISTORY_CSV, index=False)
-
-# ====== STYLING ======
-st.set_page_config(page_title="AI Resume Feedback", layout="centered")
-st.markdown("""
-    <style>
-        .title { color: #2c3e50; font-size: 2.8rem; font-weight: bold; text-align: center; }
-        .stApp { background-color: #f4f9fd; padding: 2rem; }
-        .stButton > button { background-color: #4CAF50; color: white; border-radius: 8px; }
-        .stDownloadButton > button { background-color: #3498db; color: white; }
-    </style>
-""", unsafe_allow_html=True)
-st.markdown("<h1 class='title'>📄 AI Resume Feedback Bot</h1>", unsafe_allow_html=True)
-
-# ====== AUTHENTICATION ======
-def login_user(email, password):
-    df = pd.read_csv(USERS_CSV)
-    if "email" in df.columns and "password" in df.columns:
-        user = df[(df["email"] == email) & (df["password"] == password)]
-    else:
-        user = pd.DataFrame()  # Or handle with error message
-    if not user.empty:
-        return user.iloc[0].to_dict()
-    return None
-
-def signup_user(email, password):
-    df = pd.read_csv(USERS_CSV)
-    if "email" in df.columns and email in df["email"].values:
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(os.getenv("EMAIL_ADDRESS"), os.getenv("EMAIL_PASSWORD"))
+            smtp.send_message(msg)
+        return True
+    except Exception as e:
+        st.error(f"Email failed: {e}")
         return False
-    new_user = pd.DataFrame([[email, password, "user", 0, str(date.today())]],
-                            columns=["email", "password", "role", "used_today", "last_used_date"])
-    new_user.to_csv(USERS_CSV, mode='a', header=False, index=False)
-    return True
 
-if "user" not in st.session_state:
-    st.session_state.user = None
+# Utility: Generate OTP
+def generate_otp(length=6):
+    return ''.join(random.choices(string.digits, k=length))
 
-with st.sidebar:
-    st.header("🔐 Login / Signup")
-    auth_mode = st.radio("Select Mode", ["Login", "Signup"])
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
-    if auth_mode == "Login":
-        if st.button("Login"):
-            user = login_user(email, password)
-            if user:
-                st.session_state.user = user
-                st.success(f"Welcome, {email}")
-            else:
-                st.error("Invalid credentials")
+# ========== User Authentication ==========
+
+def load_users():
+    if os.path.exists(USERS_CSV):
+        try:
+            df = pd.read_csv(USERS_CSV)
+            if 'email' not in df.columns:
+                df = pd.DataFrame(columns=['email', 'password', 'phone'])
+        except Exception:
+            df = pd.DataFrame(columns=['email', 'password', 'phone'])
     else:
-        if st.button("Signup"):
-            if signup_user(email, password):
-                st.success("Account created. Please log in.")
-            else:
-                st.error("Email already exists.")
-# ====== UTILITIES ======
-import PyPDF2
-import docx2txt
+        df = pd.DataFrame(columns=['email', 'password', 'phone'])
+    return df
 
-def extract_text(file, filename):
-    if filename.endswith(".pdf"):
-        reader = PyPDF2.PdfReader(file)
-        return " ".join([page.extract_text() or "" for page in reader.pages])
-    elif filename.endswith(".docx"):
-        return docx2txt.process(file)
-    return ""
 
-def text_to_audio(text):
-    tts = gTTS(text=text, lang='en')
-    audio_path = f"audio_{datetime.now().timestamp()}.mp3"
-    tts.save(audio_path)
-    return audio_path
-
-def export_pdf(text):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    for line in text.split("\n"):
-        pdf.multi_cell(0, 10, line)
-    filename = f"feedback_{datetime.now().timestamp()}.pdf"
-    pdf.output(filename)
-    return filename
-
-def ask_groq(prompt):
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": GROQ_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7
-    }
-    res = requests.post(url, headers=headers, json=data)
-    res.raise_for_status()
-    return res.json()["choices"][0]["message"]["content"]
-
-def check_usage(email):
-    df = pd.read_csv(USERS_CSV)
-    row = df[df.email == email].index
-    if len(row) == 0:
-        return 0
-    last = df.loc[row, "last_used_date"].values[0]
-    if str(last) != str(date.today()):
-        df.loc[row, "used_today"] = 0
-        df.loc[row, "last_used_date"] = str(date.today())
-        df.to_csv(USERS_CSV, index=False)
-    return df.loc[row, "used_today"].values[0]
-
-def increment_usage(email):
-    df = pd.read_csv(USERS_CSV)
-    row = df[df.email == email].index
-    df.loc[row, "used_today"] += 1
+def save_users(df):
     df.to_csv(USERS_CSV, index=False)
 
-# ====== MAIN APP ======
-if st.session_state.user:
-    role = st.session_state.user["role"]
-    email = st.session_state.user["email"]
-    usage = check_usage(email)
 
-    st.success(f"Logged in as: {email} ({role}) | Used today: {usage}/{FREE_LIMIT if role == 'user' else '∞'}")
+def login_user(email, password):
+    df = load_users()
+    user = df[(df["email"] == email) & (df["password"] == password)]
+    return user if not user.empty else None
 
-    if role == "user" and usage >= FREE_LIMIT:
-        st.warning("🚫 Daily usage limit reached. Please upgrade to premium.")
-        st.stop()
 
-    uploaded = st.file_uploader("📎 Upload your Resume", type=["pdf", "docx"])
-    target = st.text_input("🎯 Target Role (e.g., Data Analyst, Software Engineer)")
-    reviewer_mode = st.selectbox("🧠 Reviewer Mode", ["General", "Recruiter", "Technical", "Startup", "Academic"])
-    send_email_toggle = st.checkbox("📧 Email me the feedback (optional)")
-    voice_toggle = st.checkbox("🔊 Convert feedback to voice")
+def signup_user(email, password, phone):
+    df = load_users()
+    if email in df["email"].values:
+        return False
+    df = df.append({'email': email, 'password': password, 'phone': phone}, ignore_index=True)
+    save_users(df)
+    return True
 
-    if uploaded and st.button("🧠 Analyze Resume"):
-        raw_text = extract_text(uploaded, uploaded.name)
-        prompt = f"""
-You are a {reviewer_mode} reviewing a resume for the role of {target}. Please provide:
-1. Strengths
-2. Areas for Improvement
-3. Specific Suggestions
-4. Score out of 100
-5. Summary improvement
-6. Section-wise suggestions
-Then rewrite the resume in a clean, ATS-friendly format.
 
-Resume:
-{raw_text}
-"""
+def change_password(email, current_pwd, new_pwd):
+    df = load_users()
+    user = df[(df["email"] == email) & (df["password"] == current_pwd)]
+    if not user.empty:
+        df.loc[df["email"] == email, "password"] = new_pwd
+        save_users(df)
+        return True
+    return False
 
-        with st.spinner("Analyzing your resume using Groq's LLaMA3..."):
-            gpt_response = ask_groq(prompt)
 
-        parts = gpt_response.split("Rewrite:")
-        feedback = parts[0].strip()
-        rewritten = parts[1].strip() if len(parts) > 1 else "(Could not extract rewritten resume)"
-        score_match = re.search(r"score.*?(\d{1,3})", feedback, re.IGNORECASE)
-        score = int(score_match.group(1)) if score_match else None
+def send_otp(to):
+    otp = str(random.randint(100000, 999999))
+    # In real apps: integrate with Twilio, SendGrid, etc.
+    st.session_state["otp"] = otp
+    st.session_state["otp_target"] = to
+    st.info(f"Simulated OTP sent to {to}: **{otp}**")
+    return otp
 
-        st.markdown("### 🧠 Feedback")
-        st.markdown(feedback)
 
-        if score:
-            st.progress(score / 100)
-            st.success(f"📊 Score: {score}/100")
+def verify_otp(user_input_otp):
+    return user_input_otp == st.session_state.get("otp")
 
-        st.markdown("### 📝 Rewritten Resume")
-        st.text_area("Rewritten Resume", rewritten, height=300)
+# ========== Forgot Password Flow ==========
 
-        if voice_toggle:
-            audio_path = text_to_audio(feedback)
-            st.audio(audio_path)
-            os.remove(audio_path)
+def forgot_password_flow():
+    st.subheader("🔐 Forgot Password")
+    verify_method = st.radio("Choose verification method:", ["Verify through Email", "Verify through Phone"])
 
-        pdf_path = export_pdf(feedback)
-        with open(pdf_path, "rb") as f:
-            st.download_button("⬇️ Download Feedback PDF", f, file_name="feedback.pdf")
-        os.remove(pdf_path)
+    if verify_method == "Verify through Email":
+        email = st.text_input("Enter your registered Email")
+        if st.button("Send OTP to Email"):
+            df = load_users()
+            if email in df["email"].values:
+                send_otp(email)
+                st.success("OTP sent to your Email (simulated)")
+                st.session_state["reset_email"] = email
+                st.session_state["show_email_otp"] = True
+            else:
+                st.error("Email not found.")
 
-        # Email logic placeholder
-        if send_email_toggle:
-            st.info("📧 Email sending not yet configured. Add SMTP for real delivery.")
+        if st.session_state.get("show_email_otp"):
+            otp_input = st.text_input("Enter the OTP sent to your email")
+            if st.button("Verify Email OTP"):
+                if verify_otp(otp_input):
+                    st.session_state["otp_verified"] = True
+                    st.success("OTP Verified! You may now reset your password.")
+                else:
+                    st.error("Invalid OTP")
 
-        # Save to history
-        pd.DataFrame([[email, datetime.now(), target, score, feedback, rewritten]],
-                     columns=["email", "timestamp", "role_target", "score", "feedback", "rewritten"]).to_csv(HISTORY_CSV, mode='a', header=False, index=False)
-        increment_usage(email)
+    elif verify_method == "Verify through Phone":
+        phone = st.text_input("Enter your registered Phone Number")
+        if st.button("Send OTP to Phone"):
+            df = load_users()
+            if phone in df["phone"].values:
+                send_otp(phone)
+                st.success("OTP sent to your Phone (simulated)")
+                st.session_state["reset_phone"] = phone
+                st.session_state["show_phone_otp"] = True
+            else:
+                st.error("Phone number not found.")
 
-    # ====== USER HISTORY ======
-    st.markdown("### 📁 Resume Feedback History")
-    history = pd.read_csv(HISTORY_CSV)
-    user_history = history[history.email == email].sort_values("timestamp", ascending=False)
-    st.dataframe(user_history)
+        if st.session_state.get("show_phone_otp"):
+            otp_input = st.text_input("Enter the OTP sent to your phone")
+            if st.button("Verify Phone OTP"):
+                if verify_otp(otp_input):
+                    st.session_state["otp_verified"] = True
+                    st.success("OTP Verified! You may now reset your password.")
+                else:
+                    st.error("Invalid OTP")
 
-    delete_id = st.text_input("🗑️ Enter timestamp to delete record")
-    if st.button("❌ Delete Record") and delete_id:
-        history = history[~((history.email == email) & (history.timestamp == delete_id))]
-        history.to_csv(HISTORY_CSV, index=False)
-        st.success("Record deleted successfully.")
+    # Password reset after OTP verification
+    if st.session_state.get("otp_verified"):
+        new_pwd = st.text_input("Enter new password", type="password")
+        re_pwd = st.text_input("Re-enter new password", type="password")
+        if st.button("Reset Password"):
+            if new_pwd != re_pwd:
+                st.error("Passwords do not match.")
+            else:
+                df = load_users()
+                if st.session_state.get("reset_email"):
+                    df.loc[df["email"] == st.session_state["reset_email"], "password"] = new_pwd
+                elif st.session_state.get("reset_phone"):
+                    df.loc[df["phone"] == st.session_state["reset_phone"], "password"] = new_pwd
+                save_users(df)
+                st.success("✅ Password updated successfully.")
+                st.session_state["otp_verified"] = False
+                st.session_state["show_email_otp"] = False
+                st.session_state["show_phone_otp"] = False
 
-    # ====== ADMIN DASHBOARD ======
-    if role == "admin":
-        st.markdown("### 🛠️ Admin Dashboard")
-        all_users = pd.read_csv(USERS_CSV)
-        all_hist = pd.read_csv(HISTORY_CSV)
-        st.metric("👥 Total Users", len(all_users))
-        st.metric("📄 Total Resumes Analyzed", len(all_hist))
-        if len(all_hist) > 0:
-            st.metric("📈 Avg Score", round(all_hist.score.dropna().astype(float).mean(), 2))
-            st.bar_chart(all_hist.role_target.value_counts())
+# ================= Streamlit UI Layout ===================
 
-else:
-    st.info("🔐 Please log in to continue.")
+st.set_page_config(page_title="AI Resume Feedback Bot", layout="centered")
+st.title("🤖 AI Resume Feedback Bot")
+st.markdown("Analyze your resume and get smart feedback with AI.")
+
+menu = ["Login", "Register", "Forgot Password", "Change Password"]
+choice = st.sidebar.selectbox("Menu", menu)
+
+if choice == "Login":
+    st.subheader("🔑 Login to Continue")
+    email = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+    if st.button("Login"):
+        user = login_user(email, password)
+        if user is not None:
+            st.session_state["logged_in"] = True
+            st.session_state["email"] = email
+            st.success(f"Welcome back, {email}!")
+        else:
+            st.error("Invalid credentials.")
+
+elif choice == "Register":
+    st.subheader("📝 Create New Account")
+    email = st.text_input("Email", key="reg_email")
+    phone = st.text_input("Phone Number", key="reg_phone")
+    password = st.text_input("Password", type="password", key="reg_pass")
+    confirm_password = st.text_input("Confirm Password", type="password", key="reg_pass2")
+    if st.button("Sign Up"):
+        if password != confirm_password:
+            st.error("Passwords do not match.")
+        elif signup_user(email, password, phone):
+            st.success("Account created! Please login.")
+        else:
+            st.warning("User already exists.")
+
+elif choice == "Forgot Password":
+    forgot_password_flow()
+
+elif choice == "Change Password":
+    st.subheader("🔁 Change Password")
+    email = st.text_input("Enter Email")
+    current_pwd = st.text_input("Current Password", type="password")
+    new_pwd = st.text_input("New Password", type="password")
+    confirm_new_pwd = st.text_input("Confirm New Password", type="password")
+    if st.button("Update Password"):
+        if not login_user(email, current_pwd):
+            st.error("Incorrect current password.")
+        elif new_pwd != confirm_new_pwd:
+            st.error("New passwords do not match.")
+        else:
+            df = load_users()
+            df.loc[df["email"] == email, "password"] = new_pwd
+            save_users(df)
+            st.success("Password changed successfully!")
+
+# ========== Logged-in user resume feedback ==========
+if st.session_state.get("logged_in"):
+    st.markdown("---")
+    st.header("📄 Upload Your Resume")
+    uploaded_file = st.file_uploader("Choose your resume (.pdf or .docx)", type=["pdf", "docx"])
+
+    if uploaded_file:
+        file_path = save_resume(uploaded_file, st.session_state["email"])
+        st.success("Resume uploaded successfully!")
+
+        if st.button("Analyze Resume"):
+            with st.spinner("Analyzing with AI..."):
+                feedback, strengths, weaknesses, score, keywords, audio_path = analyze_resume(file_path)
+
+                st.markdown("### ✅ Feedback Summary")
+                st.write(feedback)
+                st.markdown(f"**⭐ Score:** `{score}/10`")
+                st.markdown(f"**✅ Strengths:** {', '.join(strengths)}")
+                st.markdown(f"**⚠️ Weaknesses:** {', '.join(weaknesses)}")
+                st.markdown(f"**📌 ATS Keywords:** `{', '.join(keywords)}`")
+
+                if audio_path:
+                    st.audio(audio_path)
+
+                save_feedback(st.session_state["email"], uploaded_file.name, feedback, strengths, weaknesses, score, keywords, audio_path)
+
+    if st.button("Logout"):
+        st.session_state.clear()
+        st.success("You have been logged out.")
+
+
+# ========== Global Constants ==========
+USERS_CSV = "users.csv"
+HISTORY_CSV = "feedback_history.csv"
+OTP_DB = {}
+
+# Ensure CSV files exist
+for file, headers in [
+    (USERS_CSV, ["email", "password", "phone"]),
+    (HISTORY_CSV, ["email", "filename", "feedback", "strengths", "weaknesses", "score", "keywords", "timestamp", "audio_path"]),
+]:
+    if not os.path.exists(file):
+        pd.DataFrame(columns=headers).to_csv(file, index=False)
+
+# ========== Save Uploaded Resume ==========
+def save_resume(uploaded_file, user_email):
+    folder = "uploaded_resumes"
+    os.makedirs(folder, exist_ok=True)
+    filepath = os.path.join(folder, f"{user_email}_{uploaded_file.name}")
+    with open(filepath, "wb") as f:
+        f.write(uploaded_file.read())
+    return filepath
+
+# ========== Analyze Resume Using AI ==========
+def analyze_resume(file_path):
+    import docx
+    import PyPDF2
+
+    def extract_text(path):
+        text = ""
+        if path.endswith(".pdf"):
+            with open(path, "rb") as f:
+                reader = PyPDF2.PdfReader(f)
+                for page in reader.pages:
+                    text += page.extract_text()
+        elif path.endswith(".docx"):
+            doc = docx.Document(path)
+            text = "\n".join([para.text for para in doc.paragraphs])
+        return text
+
+    resume_text = extract_text(file_path)
+
+    prompt = f"Analyze this resume:\n\n{resume_text}\n\nGive feedback, strengths, weaknesses, a score out of 10, and 10 keywords."
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7
+    )
+
+    result = response["choices"][0]["message"]["content"]
+
+    feedback = result
+    strengths = re.findall(r"(?i)strengths?:\s*(.*)", result)
+    weaknesses = re.findall(r"(?i)weaknesses?:\s*(.*)", result)
+    score = re.findall(r"(?i)score\s*[:\-]?\s*(\d+)", result)
+    keywords = re.findall(r"(?i)keywords?:\s*(.*)", result)
+
+    strengths = strengths[0].split(",") if strengths else []
+    weaknesses = weaknesses[0].split(",") if weaknesses else []
+    score = int(score[0]) if score else 0
+    keywords = keywords[0].split(",") if keywords else []
+
+    audio_path = None
+    try:
+        from gtts import gTTS
+        audio = gTTS(text=feedback)
+        audio_path = f"audio_feedback/{uuid.uuid4()}.mp3"
+        os.makedirs("audio_feedback", exist_ok=True)
+        audio.save(audio_path)
+    except:
+        pass
+
+    return feedback, strengths, weaknesses, score, keywords, audio_path
+
+# ========== Save Feedback ==========
+def save_feedback(email, filename, feedback, strengths, weaknesses, score, keywords, audio_path):
+    df = pd.read_csv(HISTORY_CSV)
+    new_entry = {
+        "email": email,
+        "filename": filename,
+        "feedback": feedback,
+        "strengths": ",".join(strengths),
+        "weaknesses": ",".join(weaknesses),
+        "score": score,
+        "keywords": ",".join(keywords),
+        "timestamp": datetime.datetime.now(),
+        "audio_path": audio_path or "",
+    }
+    df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
+    df.to_csv(HISTORY_CSV, index=False)
+
+# ========== OTP Verification ==========
+def send_otp(contact):
+    otp = str(random.randint(100000, 999999))
+    OTP_DB[contact] = otp
+
+    if re.match(r"[^@]+@[^@]+\.[^@]+", contact):
+        yag = yagmail.SMTP(os.getenv("EMAIL_USER"), os.getenv("EMAIL_PASS"))
+        yag.send(to=contact, subject="Your OTP Code", contents=f"Your OTP is: {otp}")
+    else:
+        # Simulated SMS for deployment. Replace with Twilio if needed.
+        print(f"SMS OTP to {contact}: {otp}")
+
+def verify_otp(contact, otp):
+    return OTP_DB.get(contact) == otp
+
+
+
