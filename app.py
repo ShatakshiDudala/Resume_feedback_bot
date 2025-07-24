@@ -1,5 +1,3 @@
-# app.py (Part 1)
-
 import streamlit as st
 import pandas as pd
 import os
@@ -71,7 +69,8 @@ def signup_user(email, password, phone):
     df = load_users()
     if email in df["email"].values:
         return False
-    df = df.append({'email': email, 'password': password, 'phone': phone}, ignore_index=True)
+    new_user = pd.DataFrame([{'email': email, 'password': password, 'phone': phone}])
+    df = pd.concat([df, new_user], ignore_index=True)
     save_users(df)
     return True
 
