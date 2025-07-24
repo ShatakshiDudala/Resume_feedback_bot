@@ -8,3 +8,5 @@ docx2txt
 pdfplumber
 python-docx
 matplotlib
+fpdf==1.7.2
+
