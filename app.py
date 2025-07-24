@@ -54,7 +54,7 @@ def login_user(email, password):
 
 def signup_user(email, password):
     df = pd.read_csv(USERS_CSV)
-    if email in df.email.values:
+    if "email" in df.columns and email in df["email"].values:
         return False
     new_user = pd.DataFrame([[email, password, "user", 0, str(date.today())]],
                             columns=["email", "password", "role", "used_today", "last_used_date"])
