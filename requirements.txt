@@ -9,4 +9,5 @@ pdfplumber
 python-docx
 matplotlib
 fpdf==1.7.2
+PyPDF2
 
