@@ -44,7 +44,10 @@ st.markdown("<h1 class='title'>📄 AI Resume Feedback Bot</h1>", unsafe_allow_h
 # ====== AUTHENTICATION ======
 def login_user(email, password):
     df = pd.read_csv(USERS_CSV)
-    user = df[(df.email == email) & (df.password == password)]
+    if "email" in df.columns and "password" in df.columns:
+        user = df[(df["email"] == email) & (df["password"] == password)]
+    else:
+        user = pd.DataFrame()  # Or handle with error message
     if not user.empty:
         return user.iloc[0].to_dict()
     return None
