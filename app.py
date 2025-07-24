@@ -6,6 +6,8 @@ import requests
 from datetime import datetime, date
 from fpdf import FPDF
 from gtts import gTTS
+from groq import Groq
+
 
 # ====== CONFIG ======
 USERS_CSV = "users.csv"
