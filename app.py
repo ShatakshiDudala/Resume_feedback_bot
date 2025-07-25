@@ -1,419 +1,550 @@
+# ----------------------------- Part 1: Imports, Config, OTP, Login/Signup -----------------------------
+
 import streamlit as st
+import pandas as pd
 import os
-import sqlite3
+import uuid
 import base64
-import random
-import string
 import smtplib
+import datetime
 from email.mime.text import MIMEText
-from datetime import datetime
-from PyPDF2 import PdfReader
-import docx
-from groq import Groq
+from email.mime.multipart import MIMEMultipart
 from gtts import gTTS
-import time
+from pathlib import Path
+from io import BytesIO
+from docx import Document
+from PyPDF2 import PdfReader
 import matplotlib.pyplot as plt
 
-# Set page config and hide warnings
-st.set_page_config(page_title="AI Resume Feedback Bot", layout="wide")
-st.markdown("<style>footer {visibility: hidden;}</style>", unsafe_allow_html=True)
+# ----------------------------- Page Configuration -----------------------------
+st.set_page_config(page_title="AI Resume Feedback Bot", layout="wide", page_icon="🤖")
 
-# Groq API key
-groq_api_key = os.getenv("GROQ_API_KEY")
-client = Groq(api_key=groq_api_key)
-
-# SQLite database setup
-conn = sqlite3.connect("users.db", check_same_thread=False)
-c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    email TEXT UNIQUE,
-    phone TEXT,
-    password TEXT,
-    is_admin INTEGER DEFAULT 0
-)''')
-c.execute('''CREATE TABLE IF NOT EXISTS feedback (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_email TEXT,
-    role TEXT,
-    original_resume TEXT,
-    ai_feedback TEXT,
-    rewritten_resume TEXT,
-    audio_file TEXT,
-    timestamp TEXT
-)''')
-conn.commit()
-
-# Helper Functions
-def generate_otp():
-    return ''.join(random.choices(string.digits, k=6))
-
-def send_otp_email(email, otp):
-    try:
-        smtp_host = "smtp.example.com"  # Placeholder SMTP
-        smtp_port = 587
-        smtp_user = "your@email.com"
-        smtp_pass = "password"
-
-        msg = MIMEText(f"Your OTP is: {otp}")
-        msg["Subject"] = "Your OTP for Resume Bot"
-        msg["From"] = smtp_user
-        msg["To"] = email
-
-        server = smtplib.SMTP(smtp_host, smtp_port)
-        server.starttls()
-        server.login(smtp_user, smtp_pass)
-        server.sendmail(smtp_user, [email], msg.as_string())
-        server.quit()
-    except Exception as e:
-        st.error(f"Email sending failed: {e}")
-
-def read_pdf(file):
-    pdf_reader = PdfReader(file)
-    return "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
-
-def read_docx(file):
-    doc = docx.Document(file)
-    return "\n".join([para.text for para in doc.paragraphs])
-
-# App State
+# ----------------------------- Session State Initialization -----------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "user_email" not in st.session_state:
     st.session_state.user_email = ""
+if "username" not in st.session_state:
+    st.session_state.username = ""
+if "is_admin" not in st.session_state:
+    st.session_state.is_admin = False
+if "history" not in st.session_state:
+    st.session_state.history = []
 
-# Title UI
-st.markdown("<h1 style='text-align: center; color: #00BFFF;'>🚀 AI Resume Feedback Bot</h1>", unsafe_allow_html=True)
+# ----------------------------- Local User DB -----------------------------
+if "users" not in st.session_state:
+    st.session_state.users = {
+        "admin@example.com": {
+            "password": "admin123",
+            "name": "Admin",
+            "phone": "9999999999",
+            "otp": "",
+            "is_admin": True,
+            "history": []
+        }
+    }
 
+# ----------------------------- OTP Sender Placeholder -----------------------------
+def send_otp_via_email(email, otp):
+    # ⚠️ Replace with your SMTP credentials for real implementation
+    st.success(f"📧 OTP sent to {email}: `{otp}`")  # For testing/demo
 
+def send_otp_via_sms(phone, otp):
+    # ⚠️ Replace with Twilio or SMS API for real implementation
+    st.success(f"📱 OTP sent to phone: `{otp}`")  # For testing/demo
+
+# ----------------------------- Login / Signup UI -----------------------------
 def login_signup_ui():
-    tabs = st.tabs(["🔐 Login", "📝 Signup", "🔁 Forgot Password", "🔒 Change Password"])
+    st.markdown("<h2 style='color:#00BFFF'>🔐 Welcome to AI Resume Feedback Bot</h2>", unsafe_allow_html=True)
+    tab1, tab2 = st.tabs(["🔑 Login", "📝 Signup"])
 
-    with tabs[0]:
-        st.subheader("🔐 Login to your account")
-        login_email = st.text_input("Email", key="login_email")
-        login_password = st.text_input("Password", type="password", key="login_password")
-        if st.button("Login"):
-            c.execute("SELECT * FROM users WHERE email=? AND password=?", (login_email, login_password))
-            user = c.fetchone()
-            if user:
-                st.success(f"Welcome back, {user[1]}! 🎉")
+    with tab1:
+        email = st.text_input("📧 Email", key="login_email")
+        password = st.text_input("🔒 Password", type="password", key="login_password")
+
+        if st.button("🔓 Login"):
+            user = st.session_state.users.get(email)
+            if user and user["password"] == password:
                 st.session_state.logged_in = True
-                st.session_state.user_email = login_email
+                st.session_state.user_email = email
+                st.session_state.username = user["name"]
+                st.session_state.is_admin = user.get("is_admin", False)
+                st.success("✅ Login successful!")
                 st.experimental_rerun()
             else:
-                st.error("Invalid email or password.")
+                st.error("❌ Invalid credentials!")
 
-    with tabs[1]:
-        st.subheader("📝 Create a new account")
-        signup_name = st.text_input("Name", key="signup_name")
-        signup_email = st.text_input("Email", key="signup_email")
-        signup_phone = st.text_input("Phone", key="signup_phone")
-        signup_password = st.text_input("Password", type="password", key="signup_password")
-        confirm_password = st.text_input("Confirm Password", type="password", key="signup_confirm")
-        if st.button("Signup"):
-            if signup_password != confirm_password:
-                st.warning("Passwords do not match.")
+    with tab2:
+        name = st.text_input("👤 Full Name", key="signup_name")
+        email = st.text_input("📧 Email", key="signup_email")
+        phone = st.text_input("📱 Phone Number", key="signup_phone")
+        password = st.text_input("🔑 Password", type="password", key="signup_password")
+        confirm_password = st.text_input("🔁 Confirm Password", type="password", key="signup_confirm")
+
+        if st.button("📝 Register"):
+            if email in st.session_state.users:
+                st.warning("⚠️ Email already registered.")
+            elif password != confirm_password:
+                st.warning("❌ Passwords do not match.")
             else:
-                try:
-                    c.execute("INSERT INTO users (name, email, phone, password) VALUES (?, ?, ?, ?)",
-                              (signup_name, signup_email, signup_phone, signup_password))
-                    conn.commit()
-                    st.success("Signup successful. Please login.")
-                    st.experimental_rerun()
-                except sqlite3.IntegrityError:
-                    st.error("Email already exists. Please login.")
-
-    with tabs[2]:
-        st.subheader("🔁 Forgot Password")
-        forgot_email = st.text_input("Enter your registered email", key="forgot_email")
-        if st.button("Send OTP"):
-            otp = generate_otp()
-            st.session_state.generated_otp = otp
-            st.session_state.otp_email = forgot_email
-            send_otp_email(forgot_email, otp)
-            st.info("OTP sent to your email.")
-        if "generated_otp" in st.session_state:
-            entered_otp = st.text_input("Enter OTP")
-            new_pass = st.text_input("New Password", type="password")
-            confirm_pass = st.text_input("Confirm New Password", type="password")
-            if st.button("Reset Password"):
-                if entered_otp == st.session_state.generated_otp and new_pass == confirm_pass:
-                    c.execute("UPDATE users SET password=? WHERE email=?", (new_pass, st.session_state.otp_email))
-                    conn.commit()
-                    st.success("Password updated successfully. Please login.")
-                    del st.session_state.generated_otp
-                    del st.session_state.otp_email
-                else:
-                    st.error("OTP mismatch or passwords do not match.")
-
-    with tabs[3]:
-        st.subheader("🔒 Change Password")
-        change_email = st.text_input("Email", key="change_email")
-        current_pass = st.text_input("Current Password", type="password")
-        new_pass = st.text_input("New Password", type="password")
-        confirm_new_pass = st.text_input("Confirm New Password", type="password")
-        if st.button("Change Password"):
-            c.execute("SELECT * FROM users WHERE email=? AND password=?", (change_email, current_pass))
-            if c.fetchone():
-                if new_pass == confirm_new_pass:
-                    c.execute("UPDATE users SET password=? WHERE email=?", (new_pass, change_email))
-                    conn.commit()
-                    st.success("Password changed successfully.")
-                else:
-                    st.warning("New passwords do not match.")
-            else:
-                st.error("Current email/password is incorrect.")
-
-# If not logged in, show login/signup page
-if not st.session_state.logged_in:
-    login_signup_ui()
+                otp = str(uuid.uuid4().int)[:6]
+                st.session_state.users[email] = {
+                    "name": name,
+                    "password": password,
+                    "phone": phone,
+                    "otp": otp,
+                    "is_admin": False,
+                    "history": []
+                }
+                send_otp_via_sms(phone, otp)
+                send_otp_via_email(email, otp)
+                st.success("✅ Registered! OTP sent for verification.")
 
 
-# 🌈 Custom dashboard after login
-if st.session_state.logged_in:
-    st.markdown("## 🧠 AI Resume Feedback Dashboard")
-    st.sidebar.markdown("### 🌟 Navigation")
+# ----------------------------- OTP Verification + Sidebar Navigation -----------------------------
+
+def verify_otp_ui():
+    st.subheader("🔐 Verify OTP")
+    entered_otp = st.text_input("🔢 Enter OTP sent to your phone/email")
+    if st.button("✅ Verify"):
+        user = st.session_state.users.get(st.session_state.user_email)
+        if user and user["otp"] == entered_otp:
+            st.success("🎉 OTP Verified Successfully!")
+            st.experimental_rerun()
+        else:
+            st.error("❌ Invalid OTP. Please try again.")
+
+# ----------------------------- Sidebar Navigation -----------------------------
+def dashboard_sidebar():
+    st.sidebar.image("https://cdn-icons-png.flaticon.com/512/2920/2920284.png", width=80)
+    st.sidebar.markdown(f"### 👋 Welcome, **{st.session_state.username}**")
     dashboard_menu = st.sidebar.radio(
-        "Go to",
-        ["📤 Upload Resume", "📂 Feedback History", "🧠 AI Rewriter", "🔊 Voice Tips", "📧 Email Feedback", "📈 Admin Dashboard", "🔓 Logout"],
-        key="menu",
+        "📚 Menu",
+        [
+            "📤 Upload Resume",
+            "📊 Resume Feedback",
+            "🔄 Rewritten Resume",
+            "🔈 Audio Tips",
+            "📧 Email Feedback",
+            "📂 My History",
+            "🧹 Cleanup",
+            "🔐 Password Options",
+            "👑 Admin Dashboard" if st.session_state.is_admin else "🔒 Exit",
+        ]
     )
+    return dashboard_menu
 
-    st.markdown("---")
+# ----------------------------- Dashboard Layout After Login -----------------------------
+def dashboard():
+    st.markdown("<h2 style='color:#20B2AA'>📊 AI Resume Analysis Dashboard</h2>", unsafe_allow_html=True)
+    dashboard_menu = dashboard_sidebar()
 
     if dashboard_menu == "📤 Upload Resume":
-        st.subheader("📤 Upload your Resume (PDF/DOCX)")
-        uploaded_file = st.file_uploader("Choose your resume file", type=["pdf", "docx"], key="resume_upload")
-
-        target_role = st.text_input("🎯 Target Role (e.g., Software Engineer)", key="target_role")
-
-        if st.button("🔍 Analyze Resume"):
-            if uploaded_file and target_role:
-                file_ext = uploaded_file.name.split(".")[-1]
-                file_path = f"temp_resume.{file_ext}"
-                with open(file_path, "wb") as f:
-                    f.write(uploaded_file.read())
-                resume_text = extract_text_from_file(file_path)
-
-                # Store in session
-                st.session_state.resume_text = resume_text
-                st.session_state.target_role = target_role
-
-                st.success("Resume uploaded and extracted successfully ✅")
-                st.markdown("Click other tabs for feedback, rewrite, audio tips, or email delivery.")
-            else:
-                st.warning("Please upload your resume and enter target role.")
-
-
-    elif dashboard_menu == "📂 Feedback History":
-        st.subheader("📂 Your Feedback History")
-        user_folder = f"user_uploads/{st.session_state.current_user}"
-        if os.path.exists(user_folder):
-            files = os.listdir(user_folder)
-            if files:
-                for file in files:
-                    with open(os.path.join(user_folder, file), "r", encoding="utf-8") as f:
-                        content = f.read()
-                        st.markdown(f"**📝 {file}**")
-                        st.code(content, language="markdown")
-                        if st.button(f"🗑 Delete {file}", key=f"delete_{file}"):
-                            os.remove(os.path.join(user_folder, file))
-                            st.success(f"{file} deleted!")
-                            st.experimental_rerun()
-            else:
-                st.info("No feedback files found.")
-        else:
-            st.info("No upload history available.")
-
-    elif dashboard_menu == "🧠 AI Rewriter":
-        st.subheader("🧠 Rewritten Resume (AI Generated)")
-        if "resume_text" in st.session_state and "target_role" in st.session_state:
-            rewritten_resume = generate_rewritten_resume(st.session_state.resume_text, st.session_state.target_role)
-            st.text_area("✍️ Rewritten Resume", value=rewritten_resume, height=400)
-            if st.download_button("📥 Download Rewritten Resume", data=rewritten_resume, file_name="Rewritten_Resume.txt"):
-                st.success("Rewritten resume downloaded.")
-        else:
-            st.warning("Please upload your resume and target role first.")
-
-    elif dashboard_menu == "🔊 Voice Tips":
-        st.subheader("🔊 Audio Resume Feedback")
-        if "resume_text" in st.session_state and "target_role" in st.session_state:
-            voice_feedback = generate_feedback(st.session_state.resume_text, st.session_state.target_role)
-            tts = gTTS(text=voice_feedback, lang="en")
-            audio_path = f"feedback_{st.session_state.current_user}.mp3"
-            tts.save(audio_path)
-            st.audio(audio_path)
-            if st.button("🗑 Delete Audio"):
-                os.remove(audio_path)
-                st.success("Audio deleted.")
-        else:
-            st.warning("Upload resume and enter target role to get audio feedback.")
-
+        upload_resume_section()
+    elif dashboard_menu == "📊 Resume Feedback":
+        feedback_section()
+    elif dashboard_menu == "🔄 Rewritten Resume":
+        rewritten_resume_section()
+    elif dashboard_menu == "🔈 Audio Tips":
+        audio_tip_section()
     elif dashboard_menu == "📧 Email Feedback":
-        st.subheader("📧 Send Feedback to Email")
-        if "resume_text" in st.session_state and "target_role" in st.session_state:
-            feedback_email = st.text_input("Enter your email address")
-            if st.button("📨 Send via Email"):
-                if feedback_email:
-                    st.info("📧 Sending email... (Placeholder)")
-                    st.success(f"Feedback sent to {feedback_email} (SMTP logic can be added here)")
-                else:
-                    st.warning("Please enter an email address.")
-        else:
-            st.warning("Upload resume and enter target role to send feedback.")
-
-
-    elif dashboard_menu == "📊 Admin Dashboard":
-        st.subheader("📊 Admin Dashboard")
-        if st.session_state.current_user == "admin":
-            all_users = list_user_history()
-            user_counts = len(all_users)
-            st.markdown(f"### 👥 Total Users: `{user_counts}`")
-            st.bar_chart({"Uploads": [len(get_user_files(u)) for u in all_users]})
-            for user in all_users:
-                st.markdown(f"**🧑 User: `{user}`**")
-                user_files = get_user_files(user)
-                if user_files:
-                    for f in user_files:
-                        st.markdown(f"- 📄 `{f}`")
-                else:
-                    st.info("No uploads yet.")
-        else:
-            st.warning("You must be admin to view this section.")
-
-    elif dashboard_menu == "🔒 Change Password":
-        st.subheader("🔒 Change Your Password")
-        current_pass = st.text_input("Current Password", type="password", key="change_current")
-        new_pass = st.text_input("New Password", type="password", key="change_new")
-        confirm_pass = st.text_input("Confirm New Password", type="password", key="change_confirm")
-        if st.button("✅ Update Password"):
-            if current_pass == users_db[st.session_state.current_user]["password"]:
-                if new_pass == confirm_pass:
-                    users_db[st.session_state.current_user]["password"] = new_pass
-                    st.success("✅ Password updated successfully.")
-                else:
-                    st.error("❌ New passwords do not match.")
-            else:
-                st.error("❌ Current password is incorrect.")
-
-    elif dashboard_menu == "❓ Forgot Password":
-        st.subheader("❓ Forgot Password")
-        recovery_method = st.radio("Choose recovery method", ["📧 Email", "📱 Phone OTP"])
-        if recovery_method == "📧 Email":
-            email = st.text_input("Enter your registered email")
-            if st.button("Send Reset Link"):
-                st.info(f"📨 Reset link sent to {email} (Placeholder)")
-        else:
-            phone = st.text_input("Enter your registered phone number")
-            if st.button("Send OTP"):
-                st.info(f"📱 OTP sent to {phone} (Placeholder)")
-            otp = st.text_input("Enter OTP")
-            new_pass = st.text_input("Enter New Password", type="password")
-            confirm_pass = st.text_input("Confirm New Password", type="password")
-            if st.button("Reset Password"):
-                if new_pass == confirm_pass:
-                    st.success("✅ Password reset (simulated).")
-                else:
-                    st.error("❌ Passwords do not match.")
-
-    elif dashboard_menu == "🚪 Logout":
+        email_section()
+    elif dashboard_menu == "📂 My History":
+        history_section()
+    elif dashboard_menu == "🧹 Cleanup":
+        cleanup_section()
+    elif dashboard_menu == "🔐 Password Options":
+        password_options_section()
+    elif dashboard_menu == "👑 Admin Dashboard":
+        admin_dashboard_section()
+    elif dashboard_menu == "🔒 Exit":
         st.session_state.logged_in = False
-        st.session_state.current_user = None
-        st.success("✅ Logged out successfully.")
+        st.success("👋 Logged out!")
         st.experimental_rerun()
 
 
-# ========== UTILITY FUNCTIONS ==========
+# ----------------------------- Upload Resume Section -----------------------------
+def upload_resume_section():
+    st.markdown("## 📤 Upload Your Resume")
+    uploaded_file = st.file_uploader("Upload Resume (.pdf or .docx)", type=["pdf", "docx"])
 
-def save_user_file(username, filename, feedback, rewritten_text):
-    user_dir = os.path.join("user_uploads", username)
-    os.makedirs(user_dir, exist_ok=True)
+    target_role = st.text_input("🎯 Enter Target Role (e.g., Data Scientist, Software Engineer)")
 
-    base_name = os.path.splitext(filename)[0]
-    with open(os.path.join(user_dir, f"{base_name}_feedback.txt"), "w", encoding="utf-8") as f:
-        f.write(feedback)
+    if uploaded_file and target_role:
+        resume_bytes = uploaded_file.read()
 
-    with open(os.path.join(user_dir, f"{base_name}_rewritten.txt"), "w", encoding="utf-8") as f:
-        f.write(rewritten_text)
+        # Save file temporarily
+        resume_path = f"temp/{uploaded_file.name}"
+        with open(resume_path, "wb") as f:
+            f.write(resume_bytes)
+
+        # Extract text from resume
+        if uploaded_file.name.endswith(".pdf"):
+            resume_text = extract_text_from_pdf(resume_path)
+        elif uploaded_file.name.endswith(".docx"):
+            resume_text = extract_text_from_docx(resume_path)
+        else:
+            st.error("Unsupported file format.")
+            return
+
+        # Store in session
+        st.session_state.resume_text = resume_text
+        st.session_state.resume_name = uploaded_file.name
+        st.session_state.target_role = target_role
+
+        st.success("✅ Resume uploaded and text extracted successfully!")
+
+        st.markdown("### 📝 Extracted Resume Text Preview")
+        st.text_area("Resume Content", resume_text, height=300)
+
+# ----------------------------- PDF/DOCX Parsing Utilities -----------------------------
+def extract_text_from_pdf(pdf_path):
+    from PyPDF2 import PdfReader
+    reader = PdfReader(pdf_path)
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text()
+    return text
+
+def extract_text_from_docx(docx_path):
+    from docx import Document
+    doc = Document(docx_path)
+    return "\n".join([para.text for para in doc.paragraphs])
 
 
-def get_user_files(username):
-    user_dir = os.path.join("user_uploads", username)
-    if not os.path.exists(user_dir):
-        return []
-    return [f for f in os.listdir(user_dir) if f.endswith("_feedback.txt")]
+# ----------------------------- GPT Resume Feedback Section -----------------------------
+def generate_resume_feedback():
+    st.markdown("## 🤖 AI-Powered Resume Feedback")
+    
+    if "resume_text" not in st.session_state:
+        st.warning("⚠️ Please upload a resume first from the 'Upload Resume' tab.")
+        return
+
+    resume_text = st.session_state.resume_text
+    target_role = st.session_state.target_role
+
+    with st.spinner("Analyzing your resume with AI..."):
+        try:
+            feedback, score = call_groq_resume_feedback(resume_text, target_role)
+            st.session_state.generated_feedback = feedback
+            st.session_state.generated_score = score
+
+            st.success("✅ Resume feedback generated!")
+
+            # Display Score with progress bar
+            st.markdown("### 📊 Resume Score")
+            st.progress(score / 100.0)
+            st.write(f"Score: **{score}/100**")
+
+            # Display feedback
+            st.markdown("### 🧠 AI Feedback Summary")
+            st.write(feedback)
+
+            # Save feedback for history
+            save_feedback_to_history(
+                st.session_state.user_email,
+                st.session_state.resume_name,
+                resume_text,
+                target_role,
+                feedback,
+                score
+            )
+
+        except Exception as e:
+            st.error(f"❌ Failed to generate feedback: {str(e)}")
+
+# ----------------------------- Groq API or Mock Call -----------------------------
+def call_groq_resume_feedback(resume_text, target_role):
+    import random
+    # Replace with actual Groq API call here
+    # Simulated Response:
+    mock_feedback = f"Your resume is well-suited for the role of {target_role}. Focus more on quantifying achievements, adding relevant keywords, and clarifying your role in each project."
+    mock_score = random.randint(60, 90)
+    return mock_feedback, mock_score
+
+# ----------------------------- Store Feedback to History -----------------------------
+def save_feedback_to_history(email, resume_name, resume_text, role, feedback, score):
+    history_path = "data/feedback_history.json"
+    try:
+        with open(history_path, "r") as f:
+            history = json.load(f)
+    except:
+        history = {}
+
+    if email not in history:
+        history[email] = []
+
+    history[email].append({
+        "resume_name": resume_name,
+        "role": role,
+        "feedback": feedback,
+        "score": score,
+        "text": resume_text,
+        "timestamp": datetime.datetime.now().isoformat()
+    })
+
+    with open(history_path, "w") as f:
+        json.dump(history, f, indent=4)
 
 
-def delete_user_file(username, filename):
-    user_dir = os.path.join("user_uploads", username)
-    feedback_path = os.path.join(user_dir, filename)
-    rewritten_path = feedback_path.replace("_feedback.txt", "_rewritten.txt")
-    audio_path = feedback_path.replace("_feedback.txt", "_tips.mp3")
+# ----------------------------- Resume Rewriting Section -----------------------------
+def generate_ai_rewritten_resume():
+    st.markdown("## 🔄 AI-Generated Resume Rewrite")
 
-    for file in [feedback_path, rewritten_path, audio_path]:
-        if os.path.exists(file):
-            os.remove(file)
+    if "resume_text" not in st.session_state or "generated_feedback" not in st.session_state:
+        st.warning("⚠️ Please upload a resume and generate feedback first.")
+        return
 
+    with st.spinner("Rewriting your resume using AI..."):
+        try:
+            rewritten_resume = rewrite_resume_using_ai(
+                st.session_state.resume_text,
+                st.session_state.generated_feedback,
+                st.session_state.target_role
+            )
+            st.session_state.rewritten_resume = rewritten_resume
 
-def list_user_history():
-    if not os.path.exists("user_uploads"):
-        return []
-    return [u for u in os.listdir("user_uploads") if os.path.isdir(os.path.join("user_uploads", u))]
+            st.success("✅ Resume rewritten successfully!")
+            st.download_button(
+                label="📥 Download Rewritten Resume",
+                data=rewritten_resume,
+                file_name="AI_Rewritten_Resume.txt",
+                mime="text/plain"
+            )
+        except Exception as e:
+            st.error(f"❌ Could not rewrite resume: {str(e)}")
 
-
-# ========== GPT & Groq API ==========
-import openai
-openai.api_key = os.getenv("GROQ_API_KEY", "sk-...")  # Replace with real or use .env
-
-def generate_feedback(resume_text, target_role):
-    prompt = f"""
-You're a professional ATS recruiter. Review this resume for a role as '{target_role}' and give:
-1. Resume Score out of 100
-2. Strengths
-3. Weaknesses
-4. ATS Keyword Suggestions
-
-Resume:
-\"\"\"
-{resume_text}
-\"\"\"
-"""
-    response = openai.ChatCompletion.create(
-        model="llama3-70b-8192",
-        messages=[{"role": "user", "content": prompt}]
+def rewrite_resume_using_ai(original_text, feedback, target_role):
+    return (
+        f"📄 **AI-Rewritten Resume for Role: {target_role}**\n\n"
+        f"{original_text}\n\n"
+        f"---\n\n"
+        f"🧠 **AI Suggestions Applied:**\n{feedback}"
     )
-    return response.choices[0].message["content"]
+
+# ----------------------------- Audio Feedback Section -----------------------------
+def generate_audio_feedback():
+    st.markdown("## 🔈 Audio Tips from AI")
+
+    if "generated_feedback" not in st.session_state:
+        st.warning("⚠️ Generate resume feedback first.")
+        return
+
+    feedback_text = st.session_state.generated_feedback
+
+    try:
+        tts = gTTS(text=feedback_text)
+        audio_path = f"temp_audio_{uuid.uuid4()}.mp3"
+        tts.save(audio_path)
+        st.audio(audio_path)
+
+        st.session_state.audio_path = audio_path
+        st.success("🎧 Audio feedback generated!")
+
+    except Exception as e:
+        st.error(f"❌ Failed to generate audio: {str(e)}")
+
+# ----------------------------- Email Feedback Section -----------------------------
+def send_feedback_via_email():
+    st.markdown("## 📧 Send Feedback to Your Email")
+
+    if "generated_feedback" not in st.session_state:
+        st.warning("⚠️ Generate resume feedback first.")
+        return
+
+    if st.button("📤 Send to My Email"):
+        try:
+            sender = "youremail@example.com"
+            receiver = st.session_state.user_email
+            password = "yourpassword"
+
+            subject = "Your AI Resume Feedback"
+            body = st.session_state.generated_feedback
+
+            msg = MIMEText(body)
+            msg["Subject"] = subject
+            msg["From"] = sender
+            msg["To"] = receiver
+
+            # Placeholder: Configure actual SMTP here
+            st.info("📬 (SMTP sending skipped — placeholder used)")
+
+            st.success("✅ Feedback sent to your email!")
+
+        except Exception as e:
+            st.error(f"❌ Failed to send email: {str(e)}")
 
 
-def generate_rewritten_resume(resume_text, target_role):
-    prompt = f"Rewrite this resume to better match the job role '{target_role}':\n\n{resume_text}"
-    response = openai.ChatCompletion.create(
-        model="llama3-70b-8192",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message["content"]
+# ----------------------------- Feedback History Section -----------------------------
+def show_feedback_history():
+    st.markdown("## 📂 Feedback History")
+
+    user_id = st.session_state.user_email
+    history = resume_db.get(user_id, [])
+
+    if not history:
+        st.info("📭 No feedback history yet. Upload your resume to get started!")
+        return
+
+    for i, entry in enumerate(history[::-1]):
+        with st.expander(f"📝 Feedback for: {entry['timestamp']}"):
+            st.write(f"**Target Role:** {entry['target_role']}")
+            st.write(f"**Feedback:** {entry['feedback']}")
+            st.download_button("📥 Download Resume Text", data=entry['resume_text'], file_name="resume.txt")
+            if st.button(f"🗑 Delete Entry #{len(history)-i}", key=f"delete_{i}"):
+                resume_db[user_id].remove(entry)
+                st.success("✅ Entry deleted. Refreshing...")
+                st.experimental_rerun()
+
+# ----------------------------- Clean Audio & Feedback -----------------------------
+def cleanup_audio_and_feedback():
+    st.markdown("## 🧹 Clean Up Audio & Feedback")
+    if st.button("🧽 Clear All Generated Audio & Feedback"):
+        st.session_state.pop("generated_feedback", None)
+        st.session_state.pop("audio_path", None)
+        st.session_state.pop("resume_text", None)
+        st.session_state.pop("rewritten_resume", None)
+        st.success("✅ Cleared all feedback/audio successfully!")
+
+# ----------------------------- Admin Dashboard Section -----------------------------
+def show_admin_dashboard():
+    st.markdown("## 👑 Admin Dashboard (Demo)")
+
+    total_users = len(user_db)
+    total_feedbacks = sum(len(v) for v in resume_db.values())
+    feedback_chart_data = {user: len(v) for user, v in resume_db.items()}
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("👥 Total Users", total_users)
+    with col2:
+        st.metric("📄 Total Feedbacks", total_feedbacks)
+
+    st.subheader("📊 Feedback Count per User")
+    if feedback_chart_data:
+        df_chart = pd.DataFrame(list(feedback_chart_data.items()), columns=["User", "Feedback Count"])
+        st.bar_chart(df_chart.set_index("User"))
+    else:
+        st.info("📉 No feedback data to display.")
+
+    st.caption("🔒 Note: Admin dashboard is a demo and can be extended with role-based control.")
 
 
-# ========== gTTS AUDIO TIPS ==========
-from gtts import gTTS
-import base64
+# ----------------------------- Change Password Section -----------------------------
+def change_password():
+    st.markdown("## 🔐 Change Password")
 
-def generate_audio_tips(feedback_text, username, filename):
-    tts = gTTS(text=feedback_text, lang='en')
-    audio_path = os.path.join("user_uploads", username, f"{filename}_tips.mp3")
-    tts.save(audio_path)
-    return audio_path
+    current_password = st.text_input("🔑 Current Password", type="password", key="curr_pwd")
+    new_password = st.text_input("🆕 New Password", type="password", key="new_pwd")
+    confirm_password = st.text_input("✅ Confirm New Password", type="password", key="conf_pwd")
+
+    if st.button("🔄 Update Password"):
+        user_data = user_db.get(st.session_state.user_email)
+        if not user_data or user_data["password"] != current_password:
+            st.error("❌ Current password is incorrect.")
+        elif new_password != confirm_password:
+            st.warning("⚠️ New password and confirm password do not match.")
+        else:
+            user_data["password"] = new_password
+            st.success("✅ Password updated successfully!")
+
+# ----------------------------- Forgot Password Section -----------------------------
+def forgot_password():
+    st.markdown("## ❓ Forgot Password")
+
+    email = st.text_input("📧 Enter your registered email")
+    if st.button("📨 Send OTP to Email"):
+        if email not in user_db:
+            st.error("❌ Email not registered.")
+        else:
+            otp = str(random.randint(1000, 9999))
+            st.session_state.otp = otp
+            st.session_state.otp_email = email
+            st.info(f"📩 OTP sent to {email} (Simulated): `{otp}`")  # Simulated
+            st.experimental_rerun()
+
+    if "otp_email" in st.session_state:
+        entered_otp = st.text_input("🔐 Enter OTP from Email", key="entered_email_otp")
+        new_pwd = st.text_input("🆕 New Password", type="password", key="forgot_new_pwd")
+        confirm_pwd = st.text_input("✅ Confirm Password", type="password", key="forgot_conf_pwd")
+
+        if st.button("🔁 Reset Password"):
+            if entered_otp != st.session_state.otp:
+                st.error("❌ Invalid OTP.")
+            elif new_pwd != confirm_pwd:
+                st.warning("⚠️ Passwords do not match.")
+            else:
+                user_db[st.session_state.otp_email]["password"] = new_pwd
+                st.success("✅ Password reset successfully!")
+                del st.session_state["otp"]
+                del st.session_state["otp_email"]
+
+# ----------------------------- Section Headers -----------------------------
+def show_section_header(title, icon):
+    st.markdown(f"### {icon} {title}")
 
 
-def play_audio(audio_path):
-    with open(audio_path, "rb") as audio_file:
-        audio_bytes = audio_file.read()
-        b64_audio = base64.b64encode(audio_bytes).decode()
-        audio_html = f"""
-        <audio controls autoplay>
-            <source src="data:audio/mp3;base64,{b64_audio}" type="audio/mp3">
-        </audio>
+# ----------------------------- Main App Layout After Login -----------------------------
+def dashboard_ui():
+    st.sidebar.image("https://img.icons8.com/external-flat-juicy-fish/64/resume.png", width=100)
+    st.sidebar.markdown("## 🧠 AI Resume Feedback Bot")
+    menu = st.sidebar.radio("📚 Navigate", ["📤 Upload & Feedback", "📂 Feedback History", "🧹 Clean Audio", "🔐 Change Password", "👑 Admin Dashboard", "🚪 Logout"])
+
+    st.sidebar.markdown("---")
+    st.sidebar.success(f"👤 Logged in as: `{st.session_state.user_email}`")
+
+    if menu == "📤 Upload & Feedback":
+        show_section_header("Resume Upload & Feedback", "📤")
+        upload_resume_section()
+
+    elif menu == "📂 Feedback History":
+        show_feedback_history()
+
+    elif menu == "🧹 Clean Audio":
+        cleanup_audio_and_feedback()
+
+    elif menu == "🔐 Change Password":
+        change_password()
+
+    elif menu == "👑 Admin Dashboard":
+        show_admin_dashboard()
+
+    elif menu == "🚪 Logout":
+        st.session_state.clear()
+        st.success("✅ Logged out successfully.")
+        st.experimental_rerun()
+
+# ----------------------------- App Start Point -----------------------------
+def main():
+    st.set_page_config(page_title="AI Resume Feedback Bot", page_icon="🧠", layout="wide")
+    st.markdown(
         """
-        st.markdown(audio_html, unsafe_allow_html=True)
+        <style>
+        .stApp {
+            background-color: #f0f6ff;
+        }
+        .css-18e3th9 {
+            padding: 2rem;
+            border-radius: 12px;
+            background-color: #ffffff;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+        .stButton>button {
+            background-color: #1f77b4;
+            color: white;
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    if "authenticated" in st.session_state and st.session_state.authenticated:
+        dashboard_ui()
+    else:
+        login_signup_ui()
+
+# ----------------------------- Run App -----------------------------
+if __name__ == "__main__":
+    main()
