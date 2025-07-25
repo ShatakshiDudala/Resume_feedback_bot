@@ -1,442 +1,502 @@
-# app.py – Part 1
+# app.py (Part 1/6) - App Setup, Login/Signup with Session Management
 
 import streamlit as st
-from streamlit_option_menu import option_menu
-import firebase_admin
-from firebase_admin import credentials, firestore, auth
-import pyrebase
-from datetime import datetime
-import base64
+from pathlib import Path
+import json
 import os
 import random
 import string
+from datetime import datetime
 from gtts import gTTS
-import tempfile
 from io import BytesIO
-import re
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import base64
 
-# ========== 💡 Groq GPT Setup ==========
-from utils.groq_api import analyze_resume, rewrite_resume, ats_score  # Placeholder for Groq API helper functions
-from utils.file_utils import extract_text_from_pdf, extract_text_from_docx  # Resume parsing utils
+# Page config
+st.set_page_config(page_title="AI Resume Feedback Bot", page_icon="🧠", layout="wide")
 
-# ========== 🎨 Streamlit Page Settings ==========
-st.set_page_config(page_title="AI Resume Feedback Bot",
-                   page_icon="🧠", layout="wide")
+# User data path
+USER_DB = "users.json"
+os.makedirs("feedback_data", exist_ok=True)
 
-# ========== 🎨 Custom Styled Background ==========
-def add_background_color():
-    st.markdown("""
+# Load users
+def load_users():
+    if Path(USER_DB).exists():
+        with open(USER_DB, "r") as f:
+            return json.load(f)
+    return {}
+
+# Save users
+def save_users(users):
+    with open(USER_DB, "w") as f:
+        json.dump(users, f, indent=2)
+
+# Colorful background styling
+def set_background():
+    st.markdown(
+        """
         <style>
-            body {
-                background-color: #f1f6f9;
-            }
-            .stButton>button {
-                color: white;
-                background-color: #3b5998;
-                font-weight: bold;
-            }
-            .stTextInput>div>div>input {
-                background-color: #ffffff;
-                color: #000000;
-            }
-            .main > div {
-                padding: 1rem;
-                background-color: #ffffff;
-                border-radius: 10px;
-                box-shadow: 0px 0px 10px #ccc;
-            }
-            .css-1v0mbdj {
-                font-size: 18px;
-                color: #111;
-                font-weight: 600;
-            }
-        </style>
-    """, unsafe_allow_html=True)
-
-add_background_color()
-
-# ========== 🔐 Firebase Admin & Config ==========
-if not firebase_admin._apps:
-    cred = credentials.Certificate("firebase_key.json")  # Upload your Firebase private key JSON here
-    firebase_admin.initialize_app(cred)
-
-firebase_config = {
-    "apiKey": "YOUR_API_KEY",
-    "authDomain": "your-project.firebaseapp.com",
-    "databaseURL": "",
-    "projectId": "your-project-id",
-    "storageBucket": "your-project.appspot.com",
-    "messagingSenderId": "XXXXXXX",
-    "appId": "APP_ID",
-    "measurementId": "MEASURE_ID"
-}
-
-firebase = pyrebase.initialize_app(firebase_config)
-auth_fb = firebase.auth()
-db = firestore.client()
-
-# ========== 🔄 Session State Setup ==========
-if 'page' not in st.session_state:
-    st.session_state.page = "login"
-if 'user' not in st.session_state:
-    st.session_state.user = None
-if 'email' not in st.session_state:
-    st.session_state.email = ""
-if 'role' not in st.session_state:
-    st.session_state.role = "user"
-if 'feedback_history' not in st.session_state:
-    st.session_state.feedback_history = []
-if 'selected_resume_id' not in st.session_state:
-    st.session_state.selected_resume_id = None
-if 'show_dashboard' not in st.session_state:
-    st.session_state.show_dashboard = False
-
-# ========== 🔒 Encrypt Password ==========
-def encrypt_password(password):
-    return base64.b64encode(password.encode()).decode()
-
-def decrypt_password(encoded):
-    return base64.b64decode(encoded).decode()
-
-# ========== 🧹 Utility ==========
-def reset_login_fields():
-    st.session_state["login_email"] = ""
-    st.session_state["login_password"] = ""
-
-def reset_signup_fields():
-    st.session_state["signup_email"] = ""
-    st.session_state["signup_password"] = ""
-    st.session_state["signup_name"] = ""
-    st.session_state["signup_phone"] = ""
-
-
-
-# app.py – Part 2
-
-# ========== 🔐 Login/Signup UI ==========
-def login_ui():
-    st.markdown("## 🔐 Login to Your Account")
-    with st.form("login_form", clear_on_submit=False):
-        email = st.text_input("📧 Email", key="login_email")
-        password = st.text_input("🔑 Password", type="password", key="login_password")
-        submitted = st.form_submit_button("Login")
-
-        if submitted:
-            try:
-                user = auth_fb.sign_in_with_email_and_password(email, password)
-                st.success("✅ Logged in successfully!")
-                st.session_state.user = user
-                st.session_state.email = email
-                st.session_state.page = "dashboard"
-                st.experimental_rerun()
-            except Exception as e:
-                st.error("❌ Login failed. Please check your credentials.")
-
-def signup_ui():
-    st.markdown("## ✍️ Create New Account")
-    with st.form("signup_form", clear_on_submit=False):
-        name = st.text_input("🧑 Full Name", key="signup_name")
-        email = st.text_input("📧 Email", key="signup_email")
-        phone = st.text_input("📱 Phone Number", key="signup_phone")
-        password = st.text_input("🔐 Password", type="password", key="signup_password")
-        submitted = st.form_submit_button("Sign Up")
-
-        if submitted:
-            try:
-                user = auth_fb.create_user_with_email_and_password(email, password)
-                uid = user['localId']
-                db.collection("users").document(uid).set({
-                    "name": name,
-                    "email": email,
-                    "phone": phone,
-                    "created_at": datetime.now().isoformat()
-                })
-                st.success("🎉 Account created! Please log in.")
-                reset_signup_fields()
-                st.session_state.page = "login"
-                st.experimental_rerun()
-            except Exception as e:
-                st.error("❌ Signup failed. Email might already be in use.")
-
-def login_signup_page():
-    with st.container():
-        tab1, tab2 = st.tabs(["🔑 Login", "🆕 Sign Up"])
-        with tab1:
-            login_ui()
-        with tab2:
-            signup_ui()
-
-# ========== 🧭 Page Router ==========
-if st.session_state.page == "login":
-    st.markdown("## 🤖 AI Resume Feedback Bot")
-    st.info("Please login or create an account to continue.")
-    login_signup_page()
-elif st.session_state.page == "dashboard":
-    if st.session_state.user:
-        st.markdown(f"### 👋 Welcome, `{st.session_state.email}`")
-    else:
-        st.warning("You are not logged in. Redirecting...")
-        st.session_state.page = "login"
-        st.experimental_rerun()
-
-
-
-
-# app.py – Part 3
-
-# ========== 🧠 Dashboard UI ==========
-def dashboard_ui():
-    st.markdown("## 🧠 AI Resume Feedback Dashboard")
-    st.markdown("Upload your resume and enter the role you're targeting.")
-
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        target_role = st.text_input("🎯 Target Role", key="target_role")
-    with col2:
-        analyze_btn = st.button("🔍 Analyze Resume", key="analyze_btn")
-
-    uploaded_file = st.file_uploader("📄 Upload your resume (.pdf or .docx)", type=["pdf", "docx"], key="resume_uploader")
-
-    # Store uploaded file in session
-    if uploaded_file:
-        st.session_state.resume_file = uploaded_file
-        st.success("✅ Resume uploaded successfully!")
-
-    # Feedback Buttons (to be wired in Part 4)
-    colA, colB, colC, colD = st.columns(4)
-    with colA:
-        if st.button("📝 Rewrite Resume", key="rewrite_btn"):
-            st.session_state.rewrite_triggered = True
-    with colB:
-        if st.button("🔈 Audio Tips", key="audio_btn"):
-            st.session_state.audio_triggered = True
-    with colC:
-        if st.button("📧 Send to Email", key="email_btn"):
-            st.session_state.email_triggered = True
-    with colD:
-        if st.button("🧹 Clear Feedback", key="clear_btn"):
-            st.session_state.pop("resume_file", None)
-            st.session_state.pop("feedback", None)
-            st.session_state.pop("score", None)
-            st.success("🧼 Cleared feedback and resume.")
-
-    # Feedback Display Area
-    if "feedback" in st.session_state:
-        st.markdown("### 📊 AI Feedback")
-        st.markdown(st.session_state.feedback)
-        st.progress(st.session_state.get("score", 50))
-
-    if "rewritten_resume" in st.session_state:
-        st.markdown("### ✨ AI Rewritten Resume")
-        st.text_area("Rewritten Content", st.session_state.rewritten_resume, height=300)
-
-# ========== 🧭 Dashboard Routing ==========
-if st.session_state.page == "dashboard":
-    if st.session_state.get("user"):
-        dashboard_ui()
-    else:
-        st.warning("⚠️ Not authenticated. Redirecting to login...")
-        st.session_state.page = "login"
-        st.experimental_rerun()
-
-
-
-
-# app.py – Part 4
-
-import os
-import docx2txt
-import PyPDF2
-import requests
-
-# ========== 📤 Resume Text Extractor ==========
-def extract_resume_text(file):
-    text = ""
-    if file.name.endswith(".pdf"):
-        reader = PyPDF2.PdfReader(file)
-        for page in reader.pages:
-            text += page.extract_text()
-    elif file.name.endswith(".docx"):
-        text = docx2txt.process(file)
-    return text.strip()
-
-# ========== 🤖 Get Feedback from Groq ==========
-def get_ai_feedback(resume_text, target_role):
-    prompt = f"""You're an expert resume reviewer. Analyze the resume below for the role of {target_role}.
-
-Resume:
-{resume_text}
-
-Give:
-- Summary
-- Strengths
-- Weaknesses
-- Suggestions
-- Score out of 100"""
-
-    response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": "llama3-70b-8192",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7
+        .stApp {
+            background: linear-gradient(135deg, #e0f7fa, #fce4ec);
+            font-family: 'Segoe UI', sans-serif;
         }
+        .login-box, .signup-box {
+            background-color: #ffffffcc;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 2px 2px 12px #aaa;
+            max-width: 400px;
+            margin: auto;
+        }
+        .title {
+            text-align: center;
+            color: #6a1b9a;
+            font-size: 2rem;
+            margin-bottom: 1rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
-    result = response.json()
-    feedback = result['choices'][0]['message']['content']
+# Session state defaults
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "current_user" not in st.session_state:
+    st.session_state.current_user = None
+if "dashboard_page" not in st.session_state:
+    st.session_state.dashboard_page = "home"
 
-    # Extract score (naive parsing)
-    score_line = [line for line in feedback.splitlines() if "score" in line.lower()]
-    score = 60
-    for line in score_line:
-        digits = [int(s) for s in line.split() if s.isdigit()]
-        if digits:
-            score = digits[0]
-            break
+# Background
+set_background()
 
-    return feedback, min(score, 100)
+# Login & Signup
+def login_signup_page():
+    st.markdown("<div class='title'>🚀 AI Resume Feedback Bot</div>", unsafe_allow_html=True)
+    tab1, tab2 = st.tabs(["🔐 Login", "🆕 Signup"])
 
-# ========== 🔍 Handle Resume Analysis ==========
-if st.session_state.page == "dashboard" and st.session_state.get("resume_file") and st.session_state.get("target_role") and st.session_state.get("analyze_btn"):
+    with tab1:
+        with st.container():
+            st.markdown("<div class='login-box'>", unsafe_allow_html=True)
+            email_login = st.text_input("📧 Email", key="login_email")
+            password_login = st.text_input("🔑 Password", type="password", key="login_password")
+            if st.button("Login", key="login_btn"):
+                users = load_users()
+                if email_login in users and users[email_login]["password"] == password_login:
+                    st.session_state.logged_in = True
+                    st.session_state.current_user = email_login
+                    st.success("Login successful!")
+                    st.rerun()
+                else:
+                    st.error("Invalid credentials.")
+            st.markdown("</div>", unsafe_allow_html=True)
 
-    resume_text = extract_resume_text(st.session_state.resume_file)
-    if resume_text:
-        with st.spinner("Analyzing with Groq..."):
-            feedback, score = get_ai_feedback(resume_text, st.session_state.target_role)
-            st.session_state.feedback = feedback
-            st.session_state.score = score
-            st.success("✅ Feedback generated!")
-            st.rerun()
+    with tab2:
+        with st.container():
+            st.markdown("<div class='signup-box'>", unsafe_allow_html=True)
+            email_signup = st.text_input("📧 Email", key="signup_email")
+            password_signup = st.text_input("🔑 Password", type="password", key="signup_pass1")
+            confirm_signup = st.text_input("🔁 Confirm Password", type="password", key="signup_pass2")
+            if st.button("Create Account", key="signup_btn"):
+                users = load_users()
+                if email_signup in users:
+                    st.warning("Account already exists.")
+                elif password_signup != confirm_signup:
+                    st.warning("Passwords do not match.")
+                else:
+                    users[email_signup] = {"password": password_signup, "is_admin": False}
+                    save_users(users)
+                    st.success("Account created! You can now login.")
+                    st.experimental_rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+
+# Entry point
+if not st.session_state.logged_in:
+    login_signup_page()
+else:
+    # Dashboard comes next
+    st.experimental_set_query_params(logged_in="true")
+
+
+
+
+# app.py (Part 2/6) – Dashboard Navigation + Resume Upload UI (Post-login)
+
+import uuid
+import docx2txt
+import PyPDF2
+
+# Sidebar Navigation Menu
+def dashboard():
+    st.sidebar.markdown(
+        """
+        <style>
+        section[data-testid="stSidebar"] {
+            background-color: #ede7f6;
+        }
+        .sidebar-title {
+            color: #4a148c;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.sidebar.markdown("<div class='sidebar-title'>🎯 Dashboard Menu</div>", unsafe_allow_html=True)
+    dashboard_menu = st.sidebar.radio(
+        "Select an option",
+        ["📤 Upload Resume", "🤖 GPT Feedback", "🗣️ Audio Tips", "✍️ Rewrite Resume", 
+         "📨 Send to Mail", "📂 Feedback History", "📊 Admin Panel", "🔑 Change Password", 
+         "🔁 Forgot Password", "🚪 Logout"]
+    )
+
+    st.title("✨ Welcome to Your AI Resume Assistant Dashboard")
+
+    # Resume Upload Section
+    if dashboard_menu == "📤 Upload Resume":
+        st.header("📄 Upload Your Resume (PDF or DOCX)")
+        uploaded_file = st.file_uploader("Choose your resume file:", type=["pdf", "docx"], key="resume_upload")
+
+        if uploaded_file:
+            # Save file
+            user_folder = f"feedback_data/{st.session_state.current_user}"
+            os.makedirs(user_folder, exist_ok=True)
+            unique_id = str(uuid.uuid4())
+            file_path = os.path.join(user_folder, f"{unique_id}_{uploaded_file.name}")
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+
+            # Extract text
+            resume_text = extract_text_from_resume(uploaded_file)
+            st.success("✅ Resume uploaded and parsed successfully!")
+
+            # Store in session
+            st.session_state.resume_text = resume_text
+            st.session_state.uploaded_file_path = file_path
+
+            # Target Role
+            st.session_state.target_role = st.text_input("🎯 Enter your target role:", key="target_role_input")
+
+            st.info("✅ Now switch to '🤖 GPT Feedback' tab to get AI-powered review.")
+
+    return dashboard_menu
+
+# Resume Text Extraction
+def extract_text_from_resume(uploaded_file):
+    file_type = uploaded_file.name.split(".")[-1].lower()
+    if file_type == "pdf":
+        pdf_reader = PyPDF2.PdfReader(uploaded_file)
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text()
+        return text
+    elif file_type == "docx":
+        return docx2txt.process(uploaded_file)
     else:
-        st.error("❌ Could not extract text from the resume.")
+        return "Unsupported file type"
+
+# Call the dashboard if logged in
+if st.session_state.logged_in:
+    current_tab = dashboard()
 
 
 
 
-# --- Resume Rewriting with GPT ---
-def rewrite_resume(resume_text, target_role):
-    prompt = f"""You're an expert resume writer. Rewrite the following resume to better fit the target role of '{target_role}'.
-Make it more impressive, concise, and tailored for the industry.
+        if dashboard_menu == "📤 Upload Resume":
+            st.subheader("📤 Upload Your Resume")
+            uploaded_file = st.file_uploader("Upload Resume (PDF or DOCX)", type=["pdf", "docx"], key="resume_uploader")
+            target_role = st.text_input("🎯 Enter your Target Role", placeholder="e.g., Data Scientist", key="target_role")
 
-Resume:
-{resume_text}
+            if st.button("📊 Analyze Resume"):
+                if uploaded_file and target_role:
+                    with st.spinner("Reading and analyzing resume..."):
+                        file_extension = os.path.splitext(uploaded_file.name)[1]
+                        resume_text = extract_text_from_file(uploaded_file, file_extension)
 
-Rewritten Resume:"""
-    rewritten = call_gpt_api(prompt)
-    return rewritten
+                        # --- GPT Feedback ---
+                        feedback_prompt = f"Give a detailed professional resume review for someone applying to the role of {target_role}. Here's the resume:\n\n{resume_text}"
+                        resume_feedback = generate_feedback(feedback_prompt)
 
-# --- Generate and Play Audio Tips using gTTS ---
-def generate_audio_tips(text):
+                        # --- Resume Score ---
+                        score_prompt = f"Give a resume score out of 10 for this resume based on its effectiveness for the role of {target_role} and justify it briefly:\n\n{resume_text}"
+                        score_response = generate_feedback(score_prompt)
+
+                        # --- Resume Rewriting ---
+                        rewrite_prompt = f"Rewrite and improve the resume below for the role of {target_role}. Make it ATS-friendly and impactful:\n\n{resume_text}"
+                        rewritten_resume = generate_feedback(rewrite_prompt)
+
+                        # --- Audio Feedback ---
+                        audio_tip = f"Here's a tip for improving your resume for a {target_role} role: {resume_feedback.split('.')[0]}"
+                        audio_file = "audio_tip.mp3"
+                        tts = gTTS(audio_tip)
+                        tts.save(audio_file)
+
+                        # Save history
+                        feedback_data = {
+                            "feedback": resume_feedback,
+                            "score": score_response,
+                            "rewritten": rewritten_resume,
+                            "audio_file": audio_file,
+                            "role": target_role,
+                            "uploaded_on": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                        user_feedbacks.setdefault(st.session_state.user_email, []).append(feedback_data)
+
+                        # Display Results
+                        st.success("✅ Resume analysis complete!")
+                        st.markdown("### 💡 AI Feedback")
+                        st.write(resume_feedback)
+
+                        st.markdown("### 🏅 Resume Score")
+                        st.info(score_response)
+
+                        st.markdown("### 📝 Rewritten Resume (AI-generated)")
+                        st.code(rewritten_resume, language='markdown')
+
+                        st.markdown("### 🔊 Audio Tip")
+                        st.audio(audio_file, format='audio/mp3')
+
+                        st.markdown("### 📧 Send Feedback via Email")
+                        if st.button("📨 Send to Email"):
+                            email_subject = f"Your Resume Feedback for {target_role}"
+                            email_body = f"Hello,\n\nHere is the feedback for your resume:\n\n{resume_feedback}\n\nScore: {score_response}\n\nRewritten Resume:\n{rewritten_resume}"
+                            try:
+                                send_email(st.session_state.user_email, email_subject, email_body)
+                                st.success("✅ Email sent successfully!")
+                            except Exception as e:
+                                st.error(f"❌ Failed to send email: {str(e)}")
+
+                else:
+                    st.warning("⚠️ Please upload a resume and enter your target role.")
+
+
+
+
+# --------------------------- Feedback History Section --------------------------- #
+
+elif dashboard_menu == "📂 Feedback History":
+    st.subheader("📂 Your Feedback History")
+    st.markdown("---")
+    user_history = feedback_history.get(current_user, [])
+
+    if user_history:
+        for i, entry in enumerate(user_history[::-1]):
+            col1, col2 = st.columns([6, 1])
+            with col1:
+                st.markdown(f"""
+                <div style='background-color:#f3f0ff;padding:15px;border-radius:10px;margin-bottom:10px'>
+                <b>🧾 Target Role:</b> {entry['target_role']}<br>
+                <b>📈 Score:</b> {entry['score']}<br>
+                <b>🗒️ Feedback:</b> {entry['feedback']}<br>
+                </div>
+                """, unsafe_allow_html=True)
+            with col2:
+                if st.button("🗑️", key=f"delete_{i}"):
+                    user_history.remove(entry)
+                    st.success("Deleted entry!")
+                    break
+    else:
+        st.info("No feedback history yet.")
+
+# --------------------------- Admin Dashboard Section --------------------------- #
+
+elif dashboard_menu == "👑 Admin Dashboard":
+    st.subheader("👑 Admin Panel: Usage Overview")
+    st.markdown("---")
+
+    # Show number of users
+    num_users = len(users)
+    num_feedback = sum(len(v) for v in feedback_history.values())
+
+    col1, col2 = st.columns(2)
+    col1.metric("👥 Total Users", num_users)
+    col2.metric("📄 Total Feedbacks", num_feedback)
+
+    # Users list
+    with st.expander("📜 Registered Users"):
+        for user, data in users.items():
+            st.markdown(f"""
+            <div style='background-color:#e1f5fe;padding:10px;border-radius:8px;margin-bottom:5px'>
+            <b>Email:</b> {user} <br>
+            <b>Phone:</b> {data['phone']}
+            </div>
+            """, unsafe_allow_html=True)
+
+    # Feedback trends by score range (simple)
+    import matplotlib.pyplot as plt
+    from collections import Counter
+
+    score_ranges = []
+    for history in feedback_history.values():
+        for item in history:
+            score = int(item.get('score', 0))
+            if score < 40:
+                score_ranges.append("0-39")
+            elif score < 70:
+                score_ranges.append("40-69")
+            else:
+                score_ranges.append("70-100")
+
+    if score_ranges:
+        st.markdown("### 📊 Feedback Score Distribution")
+        count = Counter(score_ranges)
+        plt.bar(count.keys(), count.values(), color=['#FF6666', '#FFCC66', '#66FF66'])
+        plt.xlabel("Score Range")
+        plt.ylabel("Count")
+        st.pyplot(plt)
+    else:
+        st.info("No feedback data yet to show trends.")
+
+
+
+
+# ------------------ AI Resume Rewriting ------------------
+def ai_rewrite_resume(api_key, resume_text, role):
     try:
-        tts = gTTS(text=text, lang='en')
-        audio_path = f"audio_tips_{uuid.uuid4().hex}.mp3"
-        tts.save(audio_path)
-        return audio_path
+        prompt = f"Rewrite the following resume to better suit the target role of '{role}'. Improve clarity, professionalism, and relevance:\n\n{resume_text}"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "model": "llama3-8b-8192",
+            "messages": [
+                {"role": "system", "content": "You are a professional resume writing assistant."},
+                {"role": "user", "content": prompt}
+            ]
+        }
+        response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data)
+        rewritten = response.json()['choices'][0]['message']['content']
+        return rewritten
     except Exception as e:
-        st.error("❌ Failed to generate audio tips.")
+        return f"❌ Failed to rewrite resume: {e}"
+
+# ------------------ Audio Tips via gTTS ------------------
+def generate_audio(text, filename="audio_feedback.mp3"):
+    try:
+        speech = gTTS(text)
+        path = os.path.join("temp", filename)
+        os.makedirs("temp", exist_ok=True)
+        speech.save(path)
+        return path
+    except Exception as e:
         return None
 
-# --- Email Feedback via SMTP Placeholder ---
-def send_email_feedback(receiver_email, feedback_text):
+# ------------------ Email Feedback (Placeholder) ------------------
+def send_feedback_email(to_email, subject, body, resume_file=None):
     try:
-        # For real deployment: use environment variables securely!
-        smtp_server = "smtp.gmail.com"
-        port = 587
-        sender_email = os.getenv("SMTP_EMAIL")
-        password = os.getenv("SMTP_PASSWORD")  # app password or OAuth token
-
         msg = EmailMessage()
-        msg.set_content(feedback_text)
-        msg["Subject"] = "🧠 Your AI Resume Feedback"
-        msg["From"] = sender_email
-        msg["To"] = receiver_email
+        msg['Subject'] = subject
+        msg['From'] = 'noreply@example.com'
+        msg['To'] = to_email
+        msg.set_content(body)
 
-        with smtplib.SMTP(smtp_server, port) as server:
-            server.starttls()
-            server.login(sender_email, password)
-            server.send_message(msg)
+        if resume_file:
+            with open(resume_file, 'rb') as f:
+                file_data = f.read()
+                file_name = os.path.basename(resume_file)
+            msg.add_attachment(file_data, maintype='application', subtype='octet-stream', filename=file_name)
+
+        # Placeholder - not configured with real SMTP
+        # smtp = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        # smtp.login("your_email", "your_password")
+        # smtp.send_message(msg)
+        # smtp.quit()
+
         return True
     except Exception as e:
-        st.warning("📬 Email placeholder active. Configure SMTP to enable this.")
         return False
 
+# ------------------ UI - AI Feedback Buttons ------------------
+if dashboard_menu == "📄 Resume Upload":
+    st.markdown("### 🔍 Analyze Your Resume")
+    if st.button("🧠 Analyze Resume", use_container_width=True, type="primary"):
+        if resume_text and target_role:
+            with st.spinner("Analyzing your resume..."):
+                feedback = analyze_resume_groq(api_key, resume_text, target_role)
+                score = min(100, max(30, 60 + feedback.lower().count("good") * 10 - feedback.lower().count("needs improvement") * 5))
+                st.success("✅ Resume analysis completed.")
+                st.markdown("### ✨ Feedback")
+                st.info(feedback)
 
+                st.progress(score / 100.0, text=f"Score: {score}/100")
 
+                st.session_state['feedback'] = feedback
+                st.session_state['score'] = score
 
-        # ===============================
-        # 📂 Resume Feedback History Tab
-        # ===============================
-        elif dashboard_menu == "📂 Feedback History":
+                # Save feedback
+                save_feedback(user_id, resume_text, target_role, feedback, score)
+
+    if st.button("🔄 Rewrite Resume (AI)", use_container_width=True):
+        if resume_text and target_role:
+            with st.spinner("Rewriting resume..."):
+                rewritten = ai_rewrite_resume(api_key, resume_text, target_role)
+                st.markdown("### ✍️ AI-Rewritten Resume")
+                st.code(rewritten)
+                st.download_button("⬇️ Download Rewritten Resume", rewritten, file_name="rewritten_resume.txt")
+
+    if st.button("🔈 Voice Tips", use_container_width=True):
+        if 'feedback' in st.session_state:
+            with st.spinner("Generating audio..."):
+                audio_path = generate_audio(st.session_state['feedback'])
+                if audio_path:
+                    st.audio(audio_path)
+                else:
+                    st.warning("Could not generate audio.")
+        else:
+            st.warning("Please analyze your resume first.")
+
+    if st.button("📧 Send Feedback to Email", use_container_width=True):
+        if 'feedback' in st.session_state:
+            success = send_feedback_email(user_id, "Your Resume Feedback", st.session_state['feedback'])
+            if success:
+                st.success("📨 Email sent (simulated).")
+            else:
+                st.error("❌ Failed to send email.")
+            elif dashboard_menu == "📂 Feedback History":
             st.subheader("📂 Your Resume Feedback History")
-            user_feedbacks = feedback_collection.find({"user_id": st.session_state.logged_user["_id"]})
-            for feedback in user_feedbacks:
-                with st.expander(f"📄 {feedback['timestamp']} — {feedback['target_role']}"):
-                    st.markdown("**Feedback:**")
-                    st.write(feedback["feedback"])
-                    if "audio_path" in feedback and os.path.exists(feedback["audio_path"]):
-                        st.audio(feedback["audio_path"], format="audio/mp3")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button(f"🗑️ Delete Feedback {feedback['_id']}", key=f"delete_f{feedback['_id']}"):
-                            feedback_collection.delete_one({"_id": feedback["_id"]})
-                            st.success("Feedback deleted.")
-                            st.experimental_rerun()
-                    with col2:
-                        if st.button(f"🗑️ Delete Audio {feedback['_id']}", key=f"delete_a{feedback['_id']}"):
-                            if os.path.exists(feedback["audio_path"]):
-                                os.remove(feedback["audio_path"])
-                                st.success("Audio deleted.")
-                                st.experimental_rerun()
+            history = user_data.get(email, {}).get("history", [])
+            if history:
+                for idx, item in enumerate(history[::-1]):
+                    st.markdown(f"**🗂️ Resume #{len(history)-idx}** - {item['timestamp']}")
+                    st.markdown(f"🎯 **Target Role:** `{item['target_role']}`")
+                    st.markdown(f"📄 **Feedback:**")
+                    st.code(item["feedback"], language='markdown')
+                    st.markdown(f"📊 **Score:** `{item['score']}/100`")
+                    if st.button(f"🗑️ Delete Resume #{len(history)-idx}", key=f"delete_{idx}"):
+                        user_data[email]["history"].remove(item)
+                        save_user_data(user_data)
+                        st.success("Deleted successfully.")
+                        st.experimental_rerun()
+            else:
+                st.info("No history found yet.")
 
-        # ========================
-        # 👑 Admin Dashboard
-        # ========================
         elif dashboard_menu == "👑 Admin Dashboard":
             st.subheader("👑 Admin Dashboard")
+            total_users = len(user_data)
+            total_uploads = sum(len(data.get("history", [])) for data in user_data.values())
+            st.metric("👤 Total Users", total_users)
+            st.metric("📂 Total Resume Uploads", total_uploads)
 
-            total_users = user_collection.count_documents({})
-            total_feedbacks = feedback_collection.count_documents({})
-            recent_feedbacks = list(feedback_collection.find().sort("timestamp", -1).limit(5))
+            chart_data = {
+                "User": [],
+                "Uploads": []
+            }
+            for email, data in user_data.items():
+                chart_data["User"].append(email)
+                chart_data["Uploads"].append(len(data.get("history", [])))
+            chart_df = pd.DataFrame(chart_data)
+            if not chart_df.empty:
+                st.bar_chart(chart_df.set_index("User"))
+            else:
+                st.info("No user data yet to show.")
 
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("👥 Total Users", total_users)
-            with col2:
-                st.metric("📄 Total Feedbacks", total_feedbacks)
-
-            st.markdown("### 🔍 Recent Feedback Activity")
-            for fb in recent_feedbacks:
-                st.write(f"• {fb['timestamp']} | {fb.get('target_role', 'N/A')}")
-
-            st.markdown("### 📊 Feedback Per Role")
-            pipeline = [
-                {"$group": {"_id": "$target_role", "count": {"$sum": 1}}},
-                {"$sort": {"count": -1}}
-            ]
-            role_stats = list(feedback_collection.aggregate(pipeline))
-            if role_stats:
-                import matplotlib.pyplot as plt
-                roles = [r["_id"] for r in role_stats]
-                counts = [r["count"] for r in role_stats]
-                fig, ax = plt.subplots()
-                ax.barh(roles, counts, color='skyblue')
-                ax.set_xlabel("Feedback Count")
-                ax.set_title("📊 Feedbacks by Target Role")
-                st.pyplot(fig)
-
-        # ================
-        # 🚪 Logout Option
-        # ================
-        if st.button("🔚 Logout"):
-            st.session_state.logged_in = False
-            st.session_state.logged_user = None
-            st.success("Logged out successfully!")
-            st.rerun()
+# Final cleanup
+hide_footer = """
+    <style>
+    footer {visibility: hidden;}
+    .block-container {padding-top: 2rem;}
+    </style>
+"""
+st.markdown(hide_footer, unsafe_allow_html=True)
