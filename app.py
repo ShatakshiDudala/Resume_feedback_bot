@@ -1,158 +1,116 @@
+# app.py – Part 1
+
 import streamlit as st
-import os
-import hashlib
-import sqlite3
+from streamlit_option_menu import option_menu
+import firebase_admin
+from firebase_admin import credentials, firestore, auth
+import pyrebase
 from datetime import datetime
+import base64
+import os
 import random
 import string
+from gtts import gTTS
+import tempfile
+from io import BytesIO
+import re
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
-# ---------- Database Setup ----------
-conn = sqlite3.connect("users.db", check_same_thread=False)
-cursor = conn.cursor()
+# ========== 💡 Groq GPT Setup ==========
+from utils.groq_api import analyze_resume, rewrite_resume, ats_score  # Placeholder for Groq API helper functions
+from utils.file_utils import extract_text_from_pdf, extract_text_from_docx  # Resume parsing utils
 
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        email TEXT UNIQUE,
-        phone TEXT,
-        password TEXT
-    )
-''')
+# ========== 🎨 Streamlit Page Settings ==========
+st.set_page_config(page_title="AI Resume Feedback Bot",
+                   page_icon="🧠", layout="wide")
 
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS feedback_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_email TEXT,
-        resume_filename TEXT,
-        feedback TEXT,
-        rewritten_resume TEXT,
-        timestamp TEXT
-    )
-''')
-conn.commit()
+# ========== 🎨 Custom Styled Background ==========
+def add_background_color():
+    st.markdown("""
+        <style>
+            body {
+                background-color: #f1f6f9;
+            }
+            .stButton>button {
+                color: white;
+                background-color: #3b5998;
+                font-weight: bold;
+            }
+            .stTextInput>div>div>input {
+                background-color: #ffffff;
+                color: #000000;
+            }
+            .main > div {
+                padding: 1rem;
+                background-color: #ffffff;
+                border-radius: 10px;
+                box-shadow: 0px 0px 10px #ccc;
+            }
+            .css-1v0mbdj {
+                font-size: 18px;
+                color: #111;
+                font-weight: 600;
+            }
+        </style>
+    """, unsafe_allow_html=True)
 
-# ---------- Utility Functions ----------
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+add_background_color()
 
-def check_password(password, hashed):
-    return hash_password(password) == hashed
+# ========== 🔐 Firebase Admin & Config ==========
+if not firebase_admin._apps:
+    cred = credentials.Certificate("firebase_key.json")  # Upload your Firebase private key JSON here
+    firebase_admin.initialize_app(cred)
 
-def generate_otp():
-    return ''.join(random.choices(string.digits, k=6))
+firebase_config = {
+    "apiKey": "YOUR_API_KEY",
+    "authDomain": "your-project.firebaseapp.com",
+    "databaseURL": "",
+    "projectId": "your-project-id",
+    "storageBucket": "your-project.appspot.com",
+    "messagingSenderId": "XXXXXXX",
+    "appId": "APP_ID",
+    "measurementId": "MEASURE_ID"
+}
 
-# ---------- Page Config ----------
-st.set_page_config(page_title="AI Resume Feedback Bot", layout="wide")
+firebase = pyrebase.initialize_app(firebase_config)
+auth_fb = firebase.auth()
+db = firestore.client()
 
-# ---------- Session State ----------
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "user_email" not in st.session_state:
-    st.session_state.user_email = None
-if "current_page" not in st.session_state:
-    st.session_state.current_page = "auth"
+# ========== 🔄 Session State Setup ==========
+if 'page' not in st.session_state:
+    st.session_state.page = "login"
+if 'user' not in st.session_state:
+    st.session_state.user = None
+if 'email' not in st.session_state:
+    st.session_state.email = ""
+if 'role' not in st.session_state:
+    st.session_state.role = "user"
+if 'feedback_history' not in st.session_state:
+    st.session_state.feedback_history = []
+if 'selected_resume_id' not in st.session_state:
+    st.session_state.selected_resume_id = None
+if 'show_dashboard' not in st.session_state:
+    st.session_state.show_dashboard = False
 
-# ---------- Styling ----------
-st.markdown("""
-    <style>
-        .main {
-            background: linear-gradient(to right, #f9f9f9, #d1e8ff);
-            padding: 30px;
-            border-radius: 15px;
-        }
-        .stButton > button {
-            background-color: #4CAF50;
-            color: white;
-            padding: 10px;
-            width: 100%;
-            border-radius: 10px;
-            font-weight: bold;
-        }
-        .stTextInput > div > input {
-            border: 2px solid #4CAF50;
-            border-radius: 8px;
-        }
-    </style>
-""", unsafe_allow_html=True)
+# ========== 🔒 Encrypt Password ==========
+def encrypt_password(password):
+    return base64.b64encode(password.encode()).decode()
 
-# ---------- Auth Page ----------
-def show_auth():
-    st.title("🔐 Welcome to Resume Feedback Bot")
-    tabs = st.tabs(["Login", "Signup", "Forgot Password", "Change Password"])
+def decrypt_password(encoded):
+    return base64.b64decode(encoded).decode()
 
-    # ---------- LOGIN ----------
-    with tabs[0]:
-        st.subheader("🔑 Login")
-        login_email = st.text_input("Email", key="login_email")
-        login_password = st.text_input("Password", type="password", key="login_password")
-        if st.button("Login"):
-            cursor.execute("SELECT password FROM users WHERE email=?", (login_email,))
-            result = cursor.fetchone()
-            if result and check_password(login_password, result[0]):
-                st.success("✅ Logged in successfully!")
-                st.session_state.logged_in = True
-                st.session_state.user_email = login_email
-                st.session_state.current_page = "dashboard"
-            else:
-                st.error("❌ Invalid email or password.")
+# ========== 🧹 Utility ==========
+def reset_login_fields():
+    st.session_state["login_email"] = ""
+    st.session_state["login_password"] = ""
 
-    # ---------- SIGNUP ----------
-    with tabs[1]:
-        st.subheader("📝 Create Account")
-        name = st.text_input("Full Name", key="signup_name")
-        email = st.text_input("Email", key="signup_email")
-        phone = st.text_input("Phone Number", key="signup_phone")
-        password = st.text_input("Password", type="password", key="signup_pass")
-        confirm_password = st.text_input("Confirm Password", type="password", key="signup_cpass")
-
-        if st.button("Signup"):
-            if password != confirm_password:
-                st.warning("⚠️ Passwords do not match.")
-            else:
-                try:
-                    hashed_pw = hash_password(password)
-                    cursor.execute("INSERT INTO users (name, email, phone, password) VALUES (?, ?, ?, ?)",
-                                   (name, email, phone, hashed_pw))
-                    conn.commit()
-                    st.success("🎉 Account created. Please login.")
-                    # Clear form after signup
-                    for key in ["signup_name", "signup_email", "signup_phone", "signup_pass", "signup_cpass"]:
-                        st.session_state[key] = ""
-                except sqlite3.IntegrityError:
-                    st.error("⚠️ Email already exists.")
-
-    # ---------- FORGOT PASSWORD ----------
-    with tabs[2]:
-        st.subheader("🔁 Forgot Password (OTP Placeholder)")
-        f_email = st.text_input("Enter your registered email", key="fp_email")
-        f_otp = st.text_input("Enter OTP (sent to email)", key="fp_otp")
-        f_newpass = st.text_input("New Password", type="password", key="fp_new")
-        if st.button("Reset Password"):
-            # Placeholder: Assume OTP is always valid
-            hashed = hash_password(f_newpass)
-            cursor.execute("UPDATE users SET password=? WHERE email=?", (hashed, f_email))
-            conn.commit()
-            st.success("✅ Password reset successfully.")
-
-    # ---------- CHANGE PASSWORD ----------
-    with tabs[3]:
-        st.subheader("🔒 Change Password")
-        ch_email = st.text_input("Email", key="cp_email")
-        old_pass = st.text_input("Current Password", type="password", key="cp_old")
-        new_pass = st.text_input("New Password", type="password", key="cp_new")
-
-        if st.button("Change Password"):
-            cursor.execute("SELECT password FROM users WHERE email=?", (ch_email,))
-            data = cursor.fetchone()
-            if data and check_password(old_pass, data[0]):
-                hashed = hash_password(new_pass)
-                cursor.execute("UPDATE users SET password=? WHERE email=?", (hashed, ch_email))
-                conn.commit()
-                st.success("✅ Password changed.")
-            else:
-                st.error("❌ Incorrect current password.")
-
+def reset_signup_fields():
+    st.session_state["signup_email"] = ""
+    st.session_state["signup_password"] = ""
+    st.session_state["signup_name"] = ""
+    st.session_state["signup_phone"] = ""
 
 
 
