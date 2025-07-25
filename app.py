@@ -337,62 +337,91 @@ elif dashboard_menu == "🧹 Clean Audio/Feedback":
     st.session_state.pop("rewritten_resume", None)
     st.success("✅ Cleaned audio and feedback cache.")
 
+#6
+# ✅ Part 6 — Dashboard Features
 
-        elif dashboard_menu == "🔄 Rewritten Resume":
-            st.subheader("🔄 AI Rewritten Resume")
-            if "ai_feedback" in st.session_state:
-                rewritten_resume = generate_rewritten_resume(st.session_state['ai_feedback'])
-                st.markdown("### ✨ Rewritten Resume (AI-powered)")
-                st.code(rewritten_resume, language='markdown')
-                if st.button("📥 Download Rewritten Resume as PDF"):
-                    download_pdf(rewritten_resume, "Rewritten_Resume.pdf")
-            else:
-                st.warning("📄 Please upload a resume and get feedback first.")
+elif st.session_state.get("page") == "dashboard":
+    st.sidebar.subheader(f"👋 Welcome, {st.session_state.name}")
+    dashboard_menu = st.sidebar.radio("📂 Dashboard Menu", [
+        "📤 Upload Resume", 
+        "🤖 AI Feedback", 
+        "🔄 Rewritten Resume", 
+        "🔈 Audio Tips", 
+        "📧 Email Feedback", 
+        "📂 Feedback History", 
+        "🧹 Clean Feedback/Audio", 
+        "🔐 Change Password", 
+        "❓ Forgot Password", 
+        "👑 Admin Dashboard"
+    ])
 
-        elif dashboard_menu == "🔈 Audio Tips":
-            st.subheader("🔈 Audio Tips from AI")
-            if "ai_feedback" in st.session_state:
-                if st.button("▶️ Generate Audio Tips"):
-                    audio_file = generate_audio_tips(st.session_state['ai_feedback'])
-                    st.audio(audio_file, format="audio/mp3")
-                    st.session_state['audio_generated'] = audio_file
-            else:
-                st.warning("📝 Please generate feedback before listening to audio tips.")
+    # 📤 Upload Resume
+    if dashboard_menu == "📤 Upload Resume":
+        uploaded_file = st.file_uploader("Upload your resume (.pdf or .docx)", type=["pdf", "docx"])
+        target_role = st.text_input("🎯 Target Role (e.g., Data Scientist)")
 
-        elif dashboard_menu == "📧 Email Feedback":
-            st.subheader("📧 Email Feedback")
-            email_to = st.text_input("Enter your email to receive feedback:")
-            if st.button("📨 Send Email"):
-                if email_to and "ai_feedback" in st.session_state:
-                    send_feedback_via_email(email_to, st.session_state['ai_feedback'])
-                    st.success(f"📬 Feedback sent to {email_to}")
-                else:
-                    st.warning("⚠️ Please enter a valid email and generate feedback.")
+        if uploaded_file and target_role:
+            resume_bytes = uploaded_file.read()
+            resume_text = extract_text_from_resume(uploaded_file)
 
-        elif dashboard_menu == "📂 Feedback History":
-            st.subheader("📂 Your Feedback History")
-            user_history = get_user_history(st.session_state['email'])
-            if user_history:
-                for item in user_history:
-                    st.markdown(f"**Date:** {item['timestamp']}")
-                    st.markdown(f"**Feedback:** {item['feedback']}")
-                    if st.button(f"🗑️ Delete Feedback ({item['timestamp']})", key=item['timestamp']):
-                        delete_user_history_item(st.session_state['email'], item['timestamp'])
-                        st.success("🗑️ Deleted. Refresh to see changes.")
-                        st.experimental_rerun()
-            else:
-                st.info("📁 No history available.")
+            st.success("✅ Resume uploaded and parsed successfully.")
+            st.write("📄 Extracted Text Preview:")
+            st.code(resume_text[:1000] + "...")
 
-        elif dashboard_menu == "🧹 Clean Up":
-            st.subheader("🧹 Cleanup Tools")
-            if st.button("🧽 Delete Last Feedback and Audio"):
-                if "ai_feedback" in st.session_state:
-                    st.session_state.pop("ai_feedback", None)
-                if "audio_generated" in st.session_state:
-                    st.session_state.pop("audio_generated", None)
-                st.success("🧹 Cleared feedback and audio.")
+            # Store in session for later steps
+            st.session_state["resume_text"] = resume_text
+            st.session_state["target_role"] = target_role
 
+    # 🤖 GPT Resume Feedback
+    elif dashboard_menu == "🤖 AI Feedback":
+        if "resume_text" in st.session_state and "target_role" in st.session_state:
+            with st.spinner("Analyzing your resume..."):
+                feedback = get_resume_feedback(st.session_state["resume_text"], st.session_state["target_role"])
+                st.session_state["feedback"] = feedback
 
+            score = get_resume_score(feedback)
+            st.subheader("📊 Resume Score")
+            st.progress(score / 100)
+            st.success(f"Your Resume Score: {score}/100")
+
+            st.subheader("📝 AI Feedback")
+            st.write(feedback)
+
+            # Save to DB
+            save_feedback(
+                st.session_state.email, 
+                st.session_state["resume_text"], 
+                feedback, 
+                st.session_state["target_role"], 
+                score
+            )
+        else:
+            st.warning("⚠️ Please upload a resume and set a target role first.")
+
+    # 🔄 Rewritten Resume
+    elif dashboard_menu == "🔄 Rewritten Resume":
+        if "resume_text" in st.session_state and "target_role" in st.session_state:
+            rewritten = rewrite_resume(st.session_state["resume_text"], st.session_state["target_role"])
+            st.session_state["rewritten"] = rewritten
+            st.subheader("🔁 Rewritten Resume")
+            st.code(rewritten[:2000] + "...")
+
+            # Download button
+            st.download_button("⬇️ Download Rewritten Resume", rewritten, file_name="rewritten_resume.txt")
+        else:
+            st.warning("⚠️ Please upload and analyze your resume first.")
+
+    # 🔈 Audio Tips
+    elif dashboard_menu == "🔈 Audio Tips":
+        if "feedback" in st.session_state:
+            audio_file = generate_audio_tips(st.session_state["feedback"])
+            st.audio(audio_file)
+        else:
+            st.warning("⚠️ Please get AI feedback first.")
+
+    # ... (remaining parts continue in Part 7)
+
+#7
         elif dashboard_menu == "🔐 Change Password":
             st.subheader("🔐 Change Password")
             current_password = st.text_input("Current Password", type="password", key="cur_pwd")
@@ -454,6 +483,7 @@ elif dashboard_menu == "🧹 Clean Audio/Feedback":
         st.warning("🔒 Please log in to view the dashboard.")
 
 
+#8
 # Helper: OTP Generator
 def generate_otp(length=6):
     return ''.join(random.choices(string.digits, k=length))
