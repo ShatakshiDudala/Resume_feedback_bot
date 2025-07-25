@@ -61,8 +61,10 @@ create_tables()
 # ------------ UTILITIES --------------
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
+
 def verify_password(password, hashed):
     return hash_password(password) == hashed
+
 def send_otp_email(receiver_email, otp):
     try:
         msg = EmailMessage()
@@ -74,9 +76,13 @@ def send_otp_email(receiver_email, otp):
         print(f"[DEBUG] OTP sent to email {receiver_email}: {otp}")
     except Exception as e:
         st.error("Failed to send OTP Email.")
+
 def send_otp_sms(phone_number, otp):
     # Placeholder: integrate Twilio or SMS API
     print(f"[DEBUG] OTP sent to phone {phone_number}: {otp}")
+
+
+#2
 # Function to verify OTP (email or phone)
 def verify_otp(sent_otp, entered_otp):
     return sent_otp == entered_otp
@@ -85,6 +91,7 @@ def verify_otp(sent_otp, entered_otp):
 def login_signup_ui():
     st.markdown("<h2 style='color:#2c3e50;'>🔐 Welcome to the AI Resume Feedback Bot</h2>", unsafe_allow_html=True)
     menu = st.sidebar.selectbox("Login / Signup", ["Login", "Signup"])
+
     if menu == "Signup":
         st.subheader("📝 Create a New Account")
         name = st.text_input("👤 Full Name")
@@ -93,9 +100,11 @@ def login_signup_ui():
         password = st.text_input("🔑 Password", type='password')
         confirm_password = st.text_input("✅ Confirm Password", type='password')
         otp = generate_otp()
+
         if st.button("📨 Send OTP"):
             st.session_state["sent_otp"] = otp
             send_otp_email(email, otp)  # Replace with actual email or phone OTP service
+
         entered_otp = st.text_input("🔢 Enter OTP")
         if st.button("✅ Verify & Signup"):
             if verify_otp(st.session_state.get("sent_otp", ""), entered_otp):
@@ -110,6 +119,7 @@ def login_signup_ui():
                     st.error("❌ Passwords do not match.")
             else:
                 st.error("❌ Incorrect OTP. Please try again.")
+
     elif menu == "Login":
         st.subheader("🔑 Login to Your Account")
         email = st.text_input("📧 Email")
@@ -132,14 +142,17 @@ def main():
         st.session_state["user_email"] = None
         st.session_state["user_role"] = None
         st.session_state["page"] = "login"
+
     if not st.session_state["authenticated"]:
         login_signup_ui()
     else:
         show_dashboard()
+
 if __name__ == "__main__":
     main()
 
 
+#3
 # ---------------------- MAIN DASHBOARD AFTER LOGIN ---------------------- #
 def show_dashboard():
     st.sidebar.markdown("---")
@@ -163,6 +176,7 @@ def show_dashboard():
         st.subheader("📤 Upload Your Resume")
         uploaded_file = st.file_uploader("Upload Resume (.pdf or .docx)", type=["pdf", "docx"])
         target_role = st.text_input("🎯 Enter Your Target Role", placeholder="e.g., Data Scientist")
+
         if uploaded_file and target_role:
             resume_text = extract_text_from_resume(uploaded_file)
             st.success("✅ Resume uploaded and parsed successfully.")
@@ -170,6 +184,7 @@ def show_dashboard():
             st.session_state["target_role"] = target_role
             st.write("📄 Extracted Text Preview:")
             st.code(resume_text[:1000] + "..." if len(resume_text) > 1000 else resume_text)
+
             if st.button("🚀 Analyze Resume"):
                 with st.spinner("Analyzing resume with GPT..."):
                     feedback = generate_resume_feedback(resume_text, target_role)
@@ -180,13 +195,16 @@ def show_dashboard():
                     st.experimental_rerun()
         else:
             st.warning("⚠️ Please upload a resume and enter your target role to continue.")
+
     elif dashboard_menu == "📊 Feedback & Score":
         st.subheader("🤖 Resume Feedback")
         feedback = st.session_state.get("feedback", "")
         score = st.session_state.get("score", 0)
+
         if feedback:
             st.markdown("### 💬 AI Feedback")
             st.write(feedback)
+
             st.markdown("### 📊 Resume Score")
             st.progress(score / 100)
             st.markdown(f"<h4 style='color:#3498db;'>Score: {score}/100</h4>", unsafe_allow_html=True)
@@ -204,6 +222,8 @@ def extract_text_from_resume(uploaded_file):
         return "\n".join([para.text for para in doc.paragraphs])
     else:
         return ""
+
+#4
     elif dashboard_menu == "🔄 Rewritten Resume":
         st.subheader("🔄 AI-Powered Resume Rewriting")
         resume_text = st.session_state.get("resume_text", "")
@@ -230,6 +250,7 @@ def extract_text_from_resume(uploaded_file):
             st.success("✅ Audio feedback ready!")
         else:
             st.warning("⚠️ Generate feedback first before playing audio.")
+
     elif dashboard_menu == "📧 Email Feedback":
         st.subheader("📧 Email Resume Feedback")
         user_email = st.session_state.get("email")
@@ -245,7 +266,7 @@ def extract_text_from_resume(uploaded_file):
         else:
             st.warning("⚠️ Missing email or feedback.")
 
-
+#5
 # --- GPT Resume Rewriting ---
 def rewrite_resume_with_gpt(resume_text, target_role):
     prompt = f"Improve and rewrite this resume for the role of '{target_role}'. Ensure it's professional, concise, and impactful:\n\n{resume_text}"
@@ -307,6 +328,7 @@ elif dashboard_menu == "📂 Feedback History":
             st.info("ℹ️ No feedback history found.")
     else:
         st.warning("⚠️ Please login to view history.")
+
 elif dashboard_menu == "🧹 Clean Audio/Feedback":
     st.subheader("🧹 Clean Temporary Files")
     if os.path.exists("audio_feedback.mp3"):
@@ -316,180 +338,187 @@ elif dashboard_menu == "🧹 Clean Audio/Feedback":
     st.success("✅ Cleaned audio and feedback cache.")
 
 
-# --- Change Password ---
-elif dashboard_menu == "🔐 Change Password":
-    st.subheader("🔐 Change Your Password")
-    email = st.session_state.get("email")
-    if not email:
-        st.warning("⚠️ You must be logged in to change your password.")
-    else:
-        with st.form("change_password_form"):
-            current = st.text_input("🔑 Current Password", type="password", key="curr_pass")
-            new_pass = st.text_input("🆕 New Password", type="password", key="new_pass")
-            confirm_pass = st.text_input("✅ Confirm New Password", type="password", key="conf_pass")
-            submit_btn = st.form_submit_button("🔄 Update Password")
-
-        if submit_btn:
-            with open(USER_DB, "r") as f:
-                users = json.load(f)
-
-            if users[email]["password"] != current:
-                st.error("❌ Incorrect current password.")
-            elif new_pass != confirm_pass:
-                st.error("❌ New passwords do not match.")
+        elif dashboard_menu == "🔄 Rewritten Resume":
+            st.subheader("🔄 AI Rewritten Resume")
+            if "ai_feedback" in st.session_state:
+                rewritten_resume = generate_rewritten_resume(st.session_state['ai_feedback'])
+                st.markdown("### ✨ Rewritten Resume (AI-powered)")
+                st.code(rewritten_resume, language='markdown')
+                if st.button("📥 Download Rewritten Resume as PDF"):
+                    download_pdf(rewritten_resume, "Rewritten_Resume.pdf")
             else:
-                users[email]["password"] = new_pass
-                with open(USER_DB, "w") as f:
-                    json.dump(users, f)
-                st.success("✅ Password updated successfully!")
+                st.warning("📄 Please upload a resume and get feedback first.")
 
-# --- Forgot Password with OTP (Email or Phone) ---
-elif dashboard_menu == "🔐 Forgot Password":
-    st.subheader("🔐 Reset Forgotten Password")
+        elif dashboard_menu == "🔈 Audio Tips":
+            st.subheader("🔈 Audio Tips from AI")
+            if "ai_feedback" in st.session_state:
+                if st.button("▶️ Generate Audio Tips"):
+                    audio_file = generate_audio_tips(st.session_state['ai_feedback'])
+                    st.audio(audio_file, format="audio/mp3")
+                    st.session_state['audio_generated'] = audio_file
+            else:
+                st.warning("📝 Please generate feedback before listening to audio tips.")
 
-    method = st.radio("Choose verification method:", ["📧 Email", "📱 Phone"])
+        elif dashboard_menu == "📧 Email Feedback":
+            st.subheader("📧 Email Feedback")
+            email_to = st.text_input("Enter your email to receive feedback:")
+            if st.button("📨 Send Email"):
+                if email_to and "ai_feedback" in st.session_state:
+                    send_feedback_via_email(email_to, st.session_state['ai_feedback'])
+                    st.success(f"📬 Feedback sent to {email_to}")
+                else:
+                    st.warning("⚠️ Please enter a valid email and generate feedback.")
 
-    identifier = st.text_input("Enter your registered Email or Phone:")
-    if st.button("📨 Send OTP"):
-        otp = str(random.randint(100000, 999999))
-        st.session_state["reset_otp"] = otp
-        st.session_state["reset_id"] = identifier
+        elif dashboard_menu == "📂 Feedback History":
+            st.subheader("📂 Your Feedback History")
+            user_history = get_user_history(st.session_state['email'])
+            if user_history:
+                for item in user_history:
+                    st.markdown(f"**Date:** {item['timestamp']}")
+                    st.markdown(f"**Feedback:** {item['feedback']}")
+                    if st.button(f"🗑️ Delete Feedback ({item['timestamp']})", key=item['timestamp']):
+                        delete_user_history_item(st.session_state['email'], item['timestamp'])
+                        st.success("🗑️ Deleted. Refresh to see changes.")
+                        st.experimental_rerun()
+            else:
+                st.info("📁 No history available.")
 
-        if method == "📧 Email":
-            try:
-                send_email_feedback(identifier, f"🔐 Your OTP is: {otp}")
-                st.success("✅ OTP sent to your email.")
-            except:
-                st.error("❌ Failed to send email. Check SMTP config.")
-        else:
-            st.warning("📱 Phone OTP logic placeholder. Integrate with Twilio or SMS gateway.")
-
-    entered_otp = st.text_input("🔢 Enter OTP")
-    new_reset_pass = st.text_input("🔑 New Password", type="password")
-    confirm_reset_pass = st.text_input("✅ Confirm New Password", type="password")
-
-    if st.button("🔄 Reset Password"):
-        with open(USER_DB, "r") as f:
-            users = json.load(f)
-
-        id_key = st.session_state.get("reset_id")
-        actual_otp = st.session_state.get("reset_otp")
-
-        if entered_otp != actual_otp:
-            st.error("❌ Invalid OTP.")
-        elif new_reset_pass != confirm_reset_pass:
-            st.error("❌ Passwords do not match.")
-        elif id_key not in users:
-            st.error("❌ Email/Phone not registered.")
-        else:
-            users[id_key]["password"] = new_reset_pass
-            with open(USER_DB, "w") as f:
-                json.dump(users, f)
-            st.success("✅ Password reset successful.")
+        elif dashboard_menu == "🧹 Clean Up":
+            st.subheader("🧹 Cleanup Tools")
+            if st.button("🧽 Delete Last Feedback and Audio"):
+                if "ai_feedback" in st.session_state:
+                    st.session_state.pop("ai_feedback", None)
+                if "audio_generated" in st.session_state:
+                    st.session_state.pop("audio_generated", None)
+                st.success("🧹 Cleared feedback and audio.")
 
 
-# --- Admin Dashboard ---
-elif dashboard_menu == "👑 Admin Dashboard":
-    st.subheader("📊 Admin Analytics")
-    email = st.session_state.get("email")
+        elif dashboard_menu == "🔐 Change Password":
+            st.subheader("🔐 Change Password")
+            current_password = st.text_input("Current Password", type="password", key="cur_pwd")
+            new_password = st.text_input("New Password", type="password", key="new_pwd")
+            confirm_password = st.text_input("Confirm New Password", type="password", key="conf_pwd")
+            if st.button("🔄 Update Password"):
+                if authenticate_user(st.session_state['email'], current_password):
+                    if new_password == confirm_password:
+                        update_user_password(st.session_state['email'], new_password)
+                        st.success("✅ Password updated successfully!")
+                    else:
+                        st.error("❌ New passwords do not match.")
+                else:
+                    st.error("❌ Current password is incorrect.")
 
-    if email != "admin@bot.com":
-        st.warning("🚫 You are not authorized to access the Admin Dashboard.")
+        elif dashboard_menu == "🔑 Forgot Password":
+            st.subheader("🔑 Forgot Password")
+            email_reset = st.text_input("📧 Enter your registered email")
+            otp_sent = False
+            if st.button("📤 Send OTP to Email"):
+                if email_reset:
+                    otp = generate_otp()
+                    st.session_state["reset_otp"] = otp
+                    st.session_state["reset_email"] = email_reset
+                    send_email_otp(email_reset, otp)
+                    st.success("📩 OTP sent to your email.")
+                    otp_sent = True
+                else:
+                    st.warning("⚠️ Enter a valid email.")
+
+            if "reset_otp" in st.session_state:
+                user_otp = st.text_input("🔑 Enter OTP sent to your email")
+                new_pwd = st.text_input("🆕 New Password", type="password")
+                if st.button("✅ Reset Password"):
+                    if user_otp == st.session_state["reset_otp"]:
+                        update_user_password(st.session_state["reset_email"], new_pwd)
+                        st.success("✅ Password reset successful!")
+                        del st.session_state["reset_otp"]
+                        del st.session_state["reset_email"]
+                    else:
+                        st.error("❌ Invalid OTP.")
+
+        elif dashboard_menu == "👑 Admin Dashboard":
+            st.subheader("👑 Admin Analytics Dashboard")
+            user_data = get_all_user_data()
+            feedback_count = get_feedback_count()
+            upload_count = get_upload_count()
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric("🧑 Total Users", len(user_data))
+            col2.metric("📥 Total Uploads", upload_count)
+            col3.metric("📊 Total Feedbacks", feedback_count)
+
+            st.markdown("### 📈 Feedback Over Time")
+            chart_data = get_feedback_chart_data()
+            st.line_chart(chart_data)
+
     else:
-        with open("history.json", "r") as f:
-            full_data = json.load(f)
-
-        st.markdown("### 📈 Upload Count Per User")
-        user_upload_counts = {k: len(v) for k, v in full_data.items()}
-
-        if user_upload_counts:
-            fig1, ax1 = plt.subplots()
-            ax1.bar(user_upload_counts.keys(), user_upload_counts.values(), color="skyblue")
-            plt.xticks(rotation=45, ha='right')
-            st.pyplot(fig1)
-        else:
-            st.info("ℹ️ No upload data available.")
-
-        st.markdown("### 🎯 Common Target Roles")
-        role_counts = {}
-        for user in full_data.values():
-            for record in user:
-                role = record.get("target_role", "Unknown")
-                role_counts[role] = role_counts.get(role, 0) + 1
-        if role_counts:
-            fig2, ax2 = plt.subplots()
-            ax2.pie(role_counts.values(), labels=role_counts.keys(), autopct='%1.1f%%')
-            ax2.axis('equal')
-            st.pyplot(fig2)
-        else:
-            st.info("ℹ️ No role data found.")
-
-# --- Logout Button ---
-st.markdown("---")
-if st.button("🚪 Logout"):
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    st.success("✅ You have been logged out.")
-    st.experimental_rerun()
+        st.warning("🔒 Please log in to view the dashboard.")
 
 
-# --- Final UI Cleanup and Spacing ---
-st.markdown("---")
-st.markdown(
-    """
-    <div style='text-align:center; color:#888; font-size:14px;'>
-        💼 Powered by <b>Xcellytics AI Resume Engine</b> | 📬 support@xcellytics.ai
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-st.markdown("")
+# Helper: OTP Generator
+def generate_otp(length=6):
+    return ''.join(random.choices(string.digits, k=length))
 
-# Clean up Streamlit state if page reloads
-if "feedback" not in st.session_state:
-    st.session_state.feedback = None
-if "score" not in st.session_state:
-    st.session_state.score = None
-if "target_role" not in st.session_state:
-    st.session_state.target_role = None
-if "audio_path" not in st.session_state:
-    st.session_state.audio_path = None
+# Helper: Placeholder for sending email OTP (use real SMTP in production)
+def send_email_otp(email, otp):
+    try:
+        msg = MIMEText(f"Your OTP code is: {otp}")
+        msg['Subject'] = 'Your Resume Feedback Bot OTP'
+        msg['From'] = 'noreply@yourbot.com'
+        msg['To'] = email
 
-# ------------------------------
-# 📁 Suggested Folder Structure
-# ------------------------------
-# 📦 resume_feedback_bot/
-# ┣ 📄 app.py
-# ┣ 📁 utils/
-# ┃ ┣ 📄 gpt_utils.py       # Handles GPT feedback/rewrite
-# ┃ ┣ 📄 otp_utils.py       # Email/Phone OTP (SMTP/Twilio placeholders)
-# ┣ 📁 temp/
-# ┃ ┗ 📄 (Uploaded files, rewritten resumes, audio files)
-# ┣ 📄 users.json           # User login/signup data
-# ┣ 📄 history.json         # User feedback history
-# ┗ 📄 requirements.txt     # All Python dependencies
+        # Placeholder: Replace with real SMTP credentials
+        with smtplib.SMTP('smtp.example.com', 587) as server:
+            server.starttls()
+            server.login("your_email@example.com", "your_password")
+            server.send_message(msg)
+        print(f"OTP sent to {email}: {otp}")
+    except Exception as e:
+        print("Email OTP Error:", e)
 
-# ------------------------------
-# 🛠 Deployment Notes
-# ------------------------------
-# ✅ For Email OTP:
-#    - Use smtplib with Gmail SMTP or other providers
-#    - Enable 'Less secure apps' or App Passwords
-#    - Place credentials in a .env file
+# Helper: Update User Password
+def update_user_password(email, new_password):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE users SET password = ? WHERE email = ?", (new_password, email))
+    conn.commit()
+    conn.close()
 
-# ✅ For Phone OTP:
-#    - Use Twilio or similar SMS API
-#    - Install: `pip install twilio`
-#    - Create Twilio account and verify your number
+# Admin Stats Helpers
+def get_all_user_data():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM users")
+    data = c.fetchall()
+    conn.close()
+    return data
 
-# ✅ For Groq GPT API:
-#    - Add your Groq API key in .env
-#    - Use llama3 or mixtral depending on model
+def get_upload_count():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM feedbacks")
+    count = c.fetchone()[0]
+    conn.close()
+    return count
 
-# ✅ Final Deployment:
-#    - Run: `streamlit run app.py`
-#    - Optional: Deploy on Streamlit Cloud, HuggingFace, Render, etc.
+def get_feedback_count():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM feedbacks WHERE feedback IS NOT NULL")
+    count = c.fetchone()[0]
+    conn.close()
+    return count
 
-# ------------------------------
-# 🌟 You're ready to go!
-# ------------------------------
+def get_feedback_chart_data():
+    conn = sqlite3.connect(DB_FILE)
+    df = pd.read_sql_query("SELECT created_at FROM feedbacks", conn)
+    df['created_at'] = pd.to_datetime(df['created_at'])
+    df['date'] = df['created_at'].dt.date
+    chart_data = df.groupby('date').size().reset_index(name='feedbacks')
+    chart_data.set_index('date', inplace=True)
+    return chart_data
+
+# Initialize the app
+if __name__ == "__main__":
+    st.set_page_config(page_title="AI Resume Feedback Bot", page_icon="🧠", layout="wide")
+    init_db()
+    login_signup_ui()
