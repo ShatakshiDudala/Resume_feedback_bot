@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 import matplotlib.pyplot as plt
 
 # Optional: Disable warning
-st.set_option('deprecation.showfileUploaderEncoding', False)
+#st.set_option('deprecation.showfileUploaderEncoding', False)
 
 # Load environment variables (for future SMTP or secrets)
 load_dotenv()
