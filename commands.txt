@@ -1,0 +1,7 @@
+cd "C:\Users\Win10 User\Desktop\resume-feedback-bot"
+git init
+git remote add origin https://github.com/ShatakshiDudala/Resume_feedback_bot.git
+git add .
+git commit -m "Initial commit with full working resume bot"
+git branch -M main
+git push -u origin main

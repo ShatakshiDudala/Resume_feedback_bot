@@ -454,7 +454,11 @@ if dashboard_menu == "📄 Resume Upload":
                 st.success("📨 Email sent (simulated).")
             else:
                 st.error("❌ Failed to send email.")
-            elif dashboard_menu == "📂 Feedback History":
+
+
+
+
+        elif dashboard_menu == "📂 Feedback History":
             st.subheader("📂 Your Resume Feedback History")
             history = user_data.get(email, {}).get("history", [])
             if history:
